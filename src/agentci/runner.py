@@ -63,11 +63,23 @@ class TestRunner:
         
         with TraceContext(agent_name=self.suite.agent, test_name=test.name) as ctx:
             try:
-                # Execute agent
-                output = agent_fn(test.input_data)
+                # Execute the agent
+                if test.input_data:
+                    result = agent_fn(test.input_data)
+                else:
+                    # Try calling without args, or with empty string if it fails?
+                    # For now, just call it. If it needs args, it will raise TypeError, which is fair.
+                    # Actually, for the demo agent, it needs a string. 
+                    # Let's try to be smart: if input_data is None, pass "" if it looks like it wants a string?
+                    # No, let's just respect the signature.
+                    try:
+                        result = agent_fn()
+                    except TypeError:
+                         # Fallback: maybe it requires one argument?
+                         result = agent_fn("")
                 
-                # Update trace with output and compute metrics
-                ctx.trace.spans[0].output_data = output
+                # Update span with result
+                ctx.trace.spans[0].output_data = result
                 ctx.trace.compute_metrics()
                 
                 # Evaluate assertions

@@ -187,7 +187,7 @@ class TestCase(BaseModel):
     description: str = ""
     
     # Input to the agent
-    input_data: Any = None             # String prompt, dict, or structured input
+    input_data: Any = Field(default=None, alias="input")             # String prompt, dict, or structured input
     
     # Expected behavior
     assertions: list[Assertion] = []
