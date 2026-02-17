@@ -1,0 +1,64 @@
+{
+  "trace_id": "5baea2aef8404f12",
+  "created_at": "2026-02-17T21:59:16.736390Z",
+  "spans": [
+    {
+      "span_id": "bbb819687f8d49f3",
+      "parent_span_id": null,
+      "kind": "agent",
+      "name": "examples.openai_agent.agent:run_agent",
+      "input_data": null,
+      "output_data": "Based on the data: {\"temperature\": 62, \"conditions\": \"Foggy\", \"humidity\": 78}",
+      "tool_calls": [
+        {
+          "tool_name": "get_weather",
+          "arguments": {
+            "city": "San Francisco"
+          },
+          "result": null,
+          "error": null,
+          "timestamp": "2026-02-17T21:59:16.903387+00:00",
+          "duration_ms": 0.0
+        }
+      ],
+      "llm_calls": [
+        {
+          "model": "gpt-4o-mini",
+          "provider": "openai",
+          "input_messages": [],
+          "output_text": "",
+          "tokens_in": 180,
+          "tokens_out": 25,
+          "cost_usd": 0.000042,
+          "duration_ms": 0.029833056032657623,
+          "timestamp": "2026-02-17T21:59:16.903360Z"
+        },
+        {
+          "model": "gpt-4o-mini",
+          "provider": "openai",
+          "input_messages": [],
+          "output_text": "",
+          "tokens_in": 150,
+          "tokens_out": 60,
+          "cost_usd": 0.000058,
+          "duration_ms": 0.007125549018383026,
+          "timestamp": "2026-02-17T21:59:16.903411Z"
+        }
+      ],
+      "total_tokens_in": 330,
+      "total_tokens_out": 85,
+      "total_cost_usd": 0.00009999999999999999,
+      "duration_ms": 0.0,
+      "metadata": {}
+    }
+  ],
+  "total_cost_usd": 0.00009999999999999999,
+  "total_tokens": 415,
+  "total_duration_ms": 34.55725032836199,
+  "total_llm_calls": 2,
+  "total_tool_calls": 1,
+  "test_name": "weather_basic",
+  "agent_name": "examples.openai_agent.agent:run_agent",
+  "framework": "",
+  "metadata": {}
+}

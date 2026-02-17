@@ -35,22 +35,23 @@ class TestRunner:
         except (ImportError, AttributeError, ValueError) as e:
             raise ImportError(f"Could not import agent function '{self.suite.agent}': {e}")
 
-    def run_suite(self) -> SuiteResult:
+    def run_suite(self, runs: int = 1) -> SuiteResult:
         """Execute all tests in the suite."""
         agent_fn = self._import_agent()
         suite_result = SuiteResult(suite_name=self.suite.name)
         start_time = time.perf_counter()
         
         for test in self.suite.tests:
-            run_result = self.run_test(test, agent_fn)
-            suite_result.results.append(run_result)
-            
-            if run_result.result == TestResult.PASSED:
-                suite_result.total_passed += 1
-            elif run_result.result == TestResult.FAILED:
-                suite_result.total_failed += 1
-            else:
-                suite_result.total_errors += 1
+            for _ in range(runs):
+                run_result = self.run_test(test, agent_fn)
+                suite_result.results.append(run_result)
+                
+                if run_result.result == TestResult.PASSED:
+                    suite_result.total_passed += 1
+                elif run_result.result == TestResult.FAILED:
+                    suite_result.total_failed += 1
+                else:
+                    suite_result.total_errors += 1
                 
         suite_result.duration_ms = (time.perf_counter() - start_time) * 1000
         suite_result.total_cost_usd = sum(r.trace.total_cost_usd for r in suite_result.results)

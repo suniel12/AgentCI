@@ -1,0 +1,86 @@
+{
+  "trace_id": "8afef05f833446e1",
+  "created_at": "2026-02-17T22:02:54.344818Z",
+  "spans": [
+    {
+      "span_id": "449d07f0bfe44b45",
+      "parent_span_id": null,
+      "kind": "agent",
+      "name": "examples.anthropic_agent.agent:run_agent",
+      "input_data": null,
+      "output_data": "I've fetched and saved the article summary for you.",
+      "tool_calls": [
+        {
+          "tool_name": "fetch_article",
+          "arguments": {
+            "url": "https://example.com/ai"
+          },
+          "result": null,
+          "error": null,
+          "timestamp": "2026-02-17T22:02:54.653522+00:00",
+          "duration_ms": 0.0
+        },
+        {
+          "tool_name": "save_summary",
+          "arguments": {
+            "title": "The Rise of AI Agents",
+            "summary": "AI agents are autonomous software programs that can perceive their environment, make decisions, and take actions to achieve goals. They represent a si..."
+          },
+          "result": null,
+          "error": null,
+          "timestamp": "2026-02-17T22:02:54.653558+00:00",
+          "duration_ms": 0.0
+        }
+      ],
+      "llm_calls": [
+        {
+          "model": "claude-haiku-4-5-20251001",
+          "provider": "anthropic",
+          "input_messages": [],
+          "output_text": "",
+          "tokens_in": 250,
+          "tokens_out": 40,
+          "cost_usd": 0.00036,
+          "duration_ms": 0.007292255759239197,
+          "timestamp": "2026-02-17T22:02:54.653510Z"
+        },
+        {
+          "model": "claude-haiku-4-5-20251001",
+          "provider": "anthropic",
+          "input_messages": [],
+          "output_text": "",
+          "tokens_in": 350,
+          "tokens_out": 60,
+          "cost_usd": 0.00052,
+          "duration_ms": 0.01258309930562973,
+          "timestamp": "2026-02-17T22:02:54.653555Z"
+        },
+        {
+          "model": "claude-haiku-4-5-20251001",
+          "provider": "anthropic",
+          "input_messages": [],
+          "output_text": "",
+          "tokens_in": 200,
+          "tokens_out": 30,
+          "cost_usd": 0.00028,
+          "duration_ms": 0.005000270903110504,
+          "timestamp": "2026-02-17T22:02:54.653572Z"
+        }
+      ],
+      "total_tokens_in": 800,
+      "total_tokens_out": 130,
+      "total_cost_usd": 0.00116,
+      "duration_ms": 0.0,
+      "metadata": {}
+    }
+  ],
+  "total_cost_usd": 0.00116,
+  "total_tokens": 930,
+  "total_duration_ms": 41.66541527956724,
+  "total_llm_calls": 3,
+  "total_tool_calls": 2,
+  "test_name": "summarize_basic",
+  "agent_name": "examples.anthropic_agent.agent:run_agent",
+  "framework": "",
+  "metadata": {}
+}

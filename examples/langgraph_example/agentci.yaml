@@ -1,8 +1,51 @@
-# agentci.yaml — Test suite definition
-name: "langgraph_agent_tests"
-agent: "agent:run_agent"
+# agentci.yaml — LangGraph Research Agent Test Suite
+name: "langgraph_research_agent_tests"
+agent: "examples.langgraph_example.agent:run_agent"
 framework: "langgraph"
 
+defaults:
+  max_cost_usd: 0.05
+  max_steps: 10
+
 tests:
-  - name: "basic_flow"
-    input: "Run the flow"
+  - name: "research_basic"
+    description: "Agent should search for population of France"
+    input: "What is the population of France?"
+    golden_trace: "golden/research_query.golden.json"
+    assertions:
+      - type: tool_called
+        tool: web_search
+      - type: arg_contains
+        tool: web_search
+        field: query
+        value: "france"
+      - type: output_contains
+        value: "68 million"
+      - type: cost_under
+        threshold: 0.01
+      - type: steps_under
+        threshold: 6
+
+  - name: "research_with_math"
+    description: "Agent should search for data and calculate"
+    input: "What is GDP of US divided by population of US?"
+    assertions:
+      - type: tool_called
+        tool: web_search
+      - type: tool_called
+        tool: calculator
+      - type: cost_under
+        threshold: 0.02
+    tags: [math]
+
+  - name: "research_saves"
+    description: "Agent should research and save the answer"
+    input: "Research and save: capital of Japan"
+    assertions:
+      - type: tool_called
+        tool: web_search
+      - type: tool_called
+        tool: save_answer
+      - type: cost_under
+        threshold: 0.01
+    tags: [save]

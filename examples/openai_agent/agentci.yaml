@@ -1,0 +1,49 @@
+# agentci.yaml — OpenAI Weather Agent Test Suite
+name: "openai_weather_agent_tests"
+agent: "examples.openai_agent.agent:run_agent"
+framework: "generic"
+
+defaults:
+  max_cost_usd: 0.05
+  max_steps: 5
+
+tests:
+  - name: "weather_basic"
+    description: "Agent should look up weather for San Francisco"
+    input: "What's the weather in San Francisco?"
+    golden_trace: "golden/weather_lookup.golden.json"
+    assertions:
+      - type: tool_called
+        tool: get_weather
+      - type: arg_contains
+        tool: get_weather
+        field: city
+        value: "San Francisco"
+      - type: cost_under
+        threshold: 0.01
+      - type: steps_under
+        threshold: 4
+
+  - name: "weather_forecast"
+    description: "Agent should fetch a multi-day forecast for NYC"
+    input: "Give me a 3-day forecast for NYC"
+    assertions:
+      - type: tool_called
+        tool: get_forecast
+      - type: arg_contains
+        tool: get_forecast
+        field: city
+        value: "NYC"
+      - type: cost_under
+        threshold: 0.01
+    tags: [forecast]
+
+  - name: "weather_unknown_city"
+    description: "Agent should handle unknown city gracefully"
+    input: "What's the weather on Mars?"
+    assertions:
+      - type: tool_called
+        tool: get_weather
+      - type: output_contains
+        value: "error"
+    tags: [edge_case]

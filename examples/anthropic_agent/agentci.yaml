@@ -1,0 +1,52 @@
+# agentci.yaml — Anthropic Article Summarizer Test Suite
+name: "anthropic_summarizer_tests"
+agent: "examples.anthropic_agent.agent:run_agent"
+framework: "generic"
+
+defaults:
+  max_cost_usd: 0.05
+  max_steps: 5
+
+tests:
+  - name: "summarize_basic"
+    description: "Agent should fetch article and save summary"
+    input: "Summarize this article: https://example.com/ai"
+    golden_trace: "golden/summarize_article.golden.json"
+    assertions:
+      - type: tool_called
+        tool: fetch_article
+      - type: arg_equals
+        tool: fetch_article
+        field: url
+        value: "https://example.com/ai"
+      - type: tool_called
+        tool: save_summary
+      - type: cost_under
+        threshold: 0.01
+      - type: steps_under
+        threshold: 6
+
+  - name: "summarize_no_save"
+    description: "Agent should fetch but not save when asked for quick summary"
+    input: "Just give me a quick summary, don't save it: https://example.com/climate"
+    assertions:
+      - type: tool_called
+        tool: fetch_article
+      - type: tool_not_called
+        tool: save_summary
+      - type: output_contains
+        value: "Climate"
+      - type: cost_under
+        threshold: 0.01
+    tags: [no_save]
+
+  - name: "cost_check"
+    description: "Summarization should stay within tight cost budget"
+    input: "Summarize this article: https://example.com/ai"
+    max_cost_usd: 0.005
+    assertions:
+      - type: tool_called
+        tool: fetch_article
+      - type: cost_under
+        threshold: 0.005
+    tags: [cost]

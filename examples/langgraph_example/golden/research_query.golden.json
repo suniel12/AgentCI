@@ -1,0 +1,64 @@
+{
+  "trace_id": "613962135f674838",
+  "created_at": "2026-02-17T22:06:02.460968Z",
+  "spans": [
+    {
+      "span_id": "d741e6edf3f44168",
+      "parent_span_id": null,
+      "kind": "agent",
+      "name": "examples.langgraph_example.agent:run_agent",
+      "input_data": null,
+      "output_data": "Based on my research: The population of France is approximately 68 million people (2025 estimate).",
+      "tool_calls": [
+        {
+          "tool_name": "web_search",
+          "arguments": {
+            "query": "population of france"
+          },
+          "result": null,
+          "error": null,
+          "timestamp": "2026-02-17T22:06:02.639995+00:00",
+          "duration_ms": 0.0
+        }
+      ],
+      "llm_calls": [
+        {
+          "model": "gpt-4o-mini",
+          "provider": "openai",
+          "input_messages": [],
+          "output_text": "",
+          "tokens_in": 200,
+          "tokens_out": 30,
+          "cost_usd": 0.000048,
+          "duration_ms": 0.023791566491127014,
+          "timestamp": "2026-02-17T22:06:02.639976Z"
+        },
+        {
+          "model": "gpt-4o-mini",
+          "provider": "openai",
+          "input_messages": [],
+          "output_text": "",
+          "tokens_in": 250,
+          "tokens_out": 50,
+          "cost_usd": 0.000068,
+          "duration_ms": 0.007166527211666107,
+          "timestamp": "2026-02-17T22:06:02.659527Z"
+        }
+      ],
+      "total_tokens_in": 450,
+      "total_tokens_out": 80,
+      "total_cost_usd": 0.000116,
+      "duration_ms": 0.0,
+      "metadata": {}
+    }
+  ],
+  "total_cost_usd": 0.000116,
+  "total_tokens": 530,
+  "total_duration_ms": 59.66704152524471,
+  "total_llm_calls": 2,
+  "total_tool_calls": 1,
+  "test_name": "research_basic",
+  "agent_name": "examples.langgraph_example.agent:run_agent",
+  "framework": "",
+  "metadata": {}
+}

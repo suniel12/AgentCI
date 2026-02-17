@@ -1,34 +1,35 @@
 {
-  "trace_id": "1fd536ad472549e1",
-  "created_at": "2026-02-17T20:44:15.947417Z",
+  "trace_id": "7300750c063c48d5",
+  "created_at": "2026-02-17T21:36:02.203005Z",
   "spans": [
     {
-      "span_id": "c3167fd54ad048a2",
+      "span_id": "c58ad41f991d47e0",
       "parent_span_id": null,
       "kind": "agent",
-      "name": "booking_agent",
+      "name": "examples.demo_agent.agent:run_agent",
       "input_data": null,
-      "output_data": null,
+      "output_data": "Booked flight FL123 for you.",
       "tool_calls": [
         {
           "tool_name": "search_flights",
           "arguments": {
             "origin": "SFO",
-            "destination": "JFK"
+            "destination": "JFK",
+            "date": "2023-03-15"
           },
           "result": null,
           "error": null,
-          "timestamp": "2026-02-17T20:44:15.947706+00:00",
+          "timestamp": "2026-02-17T21:36:02.679334+00:00",
           "duration_ms": 0.0
         },
         {
           "tool_name": "book_flight",
           "arguments": {
-            "flight_id": "123"
+            "flight_id": "FL123"
           },
           "result": null,
           "error": null,
-          "timestamp": "2026-02-17T20:44:15.947709+00:00",
+          "timestamp": "2026-02-17T21:36:02.781038+00:00",
           "duration_ms": 0.0
         }
       ],
@@ -40,13 +41,13 @@
       "metadata": {}
     }
   ],
-  "total_cost_usd": 0.02,
+  "total_cost_usd": 0.0,
   "total_tokens": 0,
-  "total_duration_ms": 0.0,
-  "total_llm_calls": 2,
-  "total_tool_calls": 0,
+  "total_duration_ms": 103.32375019788742,
+  "total_llm_calls": 0,
+  "total_tool_calls": 2,
   "test_name": "book_flight_basic",
-  "agent_name": "booking_agent",
+  "agent_name": "examples.demo_agent.agent:run_agent",
   "framework": "",
   "metadata": {}
 }

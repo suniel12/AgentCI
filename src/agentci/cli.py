@@ -55,43 +55,76 @@ def run(suite, runs, tag, diff, html, fail_on_cost, ci):
             config.tests = [t for t in config.tests if any(tg in t.tags for tg in tag)]
             console.print(f"Filtered to [yellow]{len(config.tests)}[/] tests with tags: {tag}")
             
-        suite_result = runner.run_suite()
+        suite_result = runner.run_suite(runs=runs)
         
         # Display Results Table
         table = Table(title=f"Results: {suite_result.suite_name}")
-        table.add_column("Test Case", style="cyan")
-        table.add_column("Result", justify="center")
-        table.add_column("Cost (USD)", justify="right")
-        table.add_column("Duration (ms)", justify="right")
-        table.add_column("Diffs/Details")
         
-        for res in suite_result.results:
-            result_str = "[green]PASSED[/]" if res.result == TestResult.PASSED else \
-                         "[red]FAILED[/]" if res.result == TestResult.FAILED else \
-                         "[bold red]ERROR[/]"
+        if runs > 1:
+            # Statistical Display
+            table.add_column("Test Case", style="cyan")
+            table.add_column("Pass Rate", justify="center")
+            table.add_column("Mean Cost", justify="right")
+            table.add_column("Mean Duration", justify="right")
+            table.add_column("Status")
+
+            # Group by test name
+            from collections import defaultdict
+            grouped_results = defaultdict(list)
+            for res in suite_result.results:
+                grouped_results[res.test_name].append(res)
             
-            details = []
-            if res.error_message:
-                details.append(f"[red]{res.error_message}[/]")
-            
-            if res.assertion_results:
-                for r in res.assertion_results:
-                    if not r['passed']:
-                        details.append(r['message'])
-            
-            # Add Diff Details
-            if res.diffs:
-                for d in res.diffs:
-                    color = "red" if d.severity == "error" else "yellow"
-                    details.append(f"[{color}]{d.message}[/]")
+            for test_name, results in grouped_results.items():
+                passed_count = sum(1 for r in results if r.result == TestResult.PASSED)
+                pass_rate = (passed_count / len(results)) * 100
+                mean_cost = sum(r.trace.total_cost_usd for r in results) / len(results)
+                mean_duration = sum(r.duration_ms for r in results) / len(results)
                 
-            table.add_row(
-                res.test_name,
-                result_str,
-                f"${res.trace.total_cost_usd:.4f}",
-                f"{res.duration_ms:.1f}",
-                "\n".join(details)
-            )
+                status_style = "green" if passed_count == len(results) else "yellow" if passed_count > 0 else "red"
+                status_str = "STABLE" if passed_count == len(results) else "FLAKY" if passed_count > 0 else "FAILING"
+                
+                table.add_row(
+                    test_name,
+                    f"{passed_count}/{len(results)} ({pass_rate:.0f}%)",
+                    f"${mean_cost:.4f}",
+                    f"{mean_duration:.1f}ms",
+                    f"[{status_style}]{status_str}[/]"
+                )
+        else:
+            # Single Run Display (Existing logic)
+            table.add_column("Test Case", style="cyan")
+            table.add_column("Result", justify="center")
+            table.add_column("Cost (USD)", justify="right")
+            table.add_column("Duration (ms)", justify="right")
+            table.add_column("Diffs/Details")
+            
+            for res in suite_result.results:
+                result_str = "[green]PASSED[/]" if res.result == TestResult.PASSED else \
+                             "[red]FAILED[/]" if res.result == TestResult.FAILED else \
+                             "[bold red]ERROR[/]"
+                
+                details = []
+                if res.error_message:
+                    details.append(f"[red]{res.error_message}[/]")
+                
+                if res.assertion_results:
+                    for r in res.assertion_results:
+                        if not r['passed']:
+                            details.append(r['message'])
+                
+                # Add Diff Details
+                if res.diffs:
+                    for d in res.diffs:
+                        color = "red" if d.severity == "error" else "yellow"
+                        details.append(f"[{color}]{d.message}[/]")
+                    
+                table.add_row(
+                    res.test_name,
+                    result_str,
+                    f"${res.trace.total_cost_usd:.4f}",
+                    f"{res.duration_ms:.1f}",
+                    "\n".join(details)
+                )
             
         console.print(table)
         
@@ -127,8 +160,55 @@ def run(suite, runs, tag, diff, html, fail_on_cost, ci):
 @click.option('--output', '-o', help='Output path for golden trace')
 def record(test_name, suite, output):
     """Run agent live and save the trace as a golden baseline."""
-    # Execute the test → save trace as golden JSON
-    pass
+    try:
+        config = load_config(suite)
+        runner = TestRunner(config)
+        agent_fn = runner._import_agent()
+        
+        # Find the specific test
+        test = next((t for t in config.tests if t.name == test_name), None)
+        if not test:
+            console.print(f"[bold red]Error:[/] Test '{test_name}' not found in {suite}")
+            return
+            
+        console.print(f"Recording trace for [cyan]{test_name}[/]...")
+        
+        # Run the test
+        result = runner.run_test(test, agent_fn)
+        
+        # Show summary
+        console.print(f"Duration: {result.duration_ms:.1f}ms")
+        console.print(f"Cost: ${result.trace.total_cost_usd:.4f}")
+        console.print(f"Tool Calls: {len(result.trace.tool_call_sequence)}")
+        
+        if result.error_message:
+             console.print(f"[bold red]Error during run:[/] {result.error_message}")
+             # We might still want to save it if it's a valid trace of a failure?
+             # detailed prompt below
+        
+        # Determine output path
+        import os
+        if output:
+            save_path = output
+        elif test.golden_trace:
+            save_path = test.golden_trace
+        else:
+            save_path = f"golden/{test_name}.golden.json"
+            
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+        
+        # Prompt user
+        from rich.prompt import Confirm
+        if Confirm.ask(f"Save golden trace to [yellow]{save_path}[/]?", default=True):
+            with open(save_path, 'w') as f:
+                f.write(result.trace.model_dump_json(indent=2))
+            console.print(f"[green]Saved![/]")
+        else:
+            console.print("[yellow]Cancelled.[/]")
+            
+    except Exception as e:
+        console.print(f"[bold red]Error:[/] {e}")
 
 
 @cli.command()
