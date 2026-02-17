@@ -26,3 +26,13 @@ jobs:
     - name: Run tests
       run: |
         pytest
+
+    - name: Verify CLI (Demo Agent)
+      run: |
+        # Install the package in editable mode
+        pip install -e .
+        
+        # Run the demo agent tests
+        # We need to set PYTHONPATH so the agent code can be imported
+        export PYTHONPATH=$PYTHONPATH:$(pwd)
+        agentci run --suite examples/demo_agent/agentci.yaml --ci
