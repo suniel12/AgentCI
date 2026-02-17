@@ -1,0 +1,40 @@
+# .github/workflows/agentci.yml
+# Copy this to your repo's .github/workflows/ directory
+
+name: Agent CI Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  agent-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install agentci
+          # pip install -r requirements.txt
+      
+      - name: Run Agent CI tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}  # Optional if using mocks
+        run: |
+          agentci run --ci --fail-on-cost 0.50
+      
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentci-report
+          path: agentci-report.html

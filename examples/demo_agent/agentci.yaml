@@ -1,0 +1,48 @@
+# agentci.yaml — Test suite definition
+name: "booking_agent_tests"
+agent: "examples.demo_agent.agent:run_agent"     # Python import path to the agent function
+framework: "langgraph"              # "langgraph", "crewai", "generic"
+
+defaults:
+  max_cost_usd: 0.10
+  max_steps: 5
+
+tests:
+  - name: "book_flight_basic"
+    description: "Agent should search for flights and book one"
+    input: "Book me a flight from SFO to JFK on March 15"
+    golden_trace: "golden/book_flight.golden.json"
+    assertions:
+      - type: tool_called
+        tool: search_flights
+      - type: arg_contains
+        tool: search_flights
+        field: origin
+        value: "SFO"
+      - type: tool_called
+        tool: book_flight
+      - type: cost_under
+        threshold: 0.05
+      - type: steps_under
+        threshold: 4
+  
+  - name: "handle_no_results"
+    description: "Agent should handle no flights found gracefully"
+    input: "Book a flight from SFO to the Moon"
+    assertions:
+      - type: tool_called
+        tool: search_flights
+      - type: tool_not_called
+        tool: book_flight
+      - type: output_contains
+        value: "sorry"
+    tags: [edge_case]
+
+  - name: "cost_guardrail"
+    description: "Agent should not exceed cost budget on complex queries"
+    input: "Find the cheapest multi-leg route from SFO to Tokyo with a layover in Hawaii"
+    max_cost_usd: 0.08
+    max_steps: 6
+    assertions:
+      - type: tool_called
+        tool: search_flights

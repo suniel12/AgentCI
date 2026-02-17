@@ -1,0 +1,8 @@
+# agentci.yaml — Test suite definition
+name: "langgraph_agent_tests"
+agent: "agent:run_agent"
+framework: "langgraph"
+
+tests:
+  - name: "basic_flow"
+    input: "Run the flow"

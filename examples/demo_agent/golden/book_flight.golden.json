@@ -1,0 +1,52 @@
+{
+  "trace_id": "1fd536ad472549e1",
+  "created_at": "2026-02-17T20:44:15.947417Z",
+  "spans": [
+    {
+      "span_id": "c3167fd54ad048a2",
+      "parent_span_id": null,
+      "kind": "agent",
+      "name": "booking_agent",
+      "input_data": null,
+      "output_data": null,
+      "tool_calls": [
+        {
+          "tool_name": "search_flights",
+          "arguments": {
+            "origin": "SFO",
+            "destination": "JFK"
+          },
+          "result": null,
+          "error": null,
+          "timestamp": "2026-02-17T20:44:15.947706+00:00",
+          "duration_ms": 0.0
+        },
+        {
+          "tool_name": "book_flight",
+          "arguments": {
+            "flight_id": "123"
+          },
+          "result": null,
+          "error": null,
+          "timestamp": "2026-02-17T20:44:15.947709+00:00",
+          "duration_ms": 0.0
+        }
+      ],
+      "llm_calls": [],
+      "total_tokens_in": 0,
+      "total_tokens_out": 0,
+      "total_cost_usd": 0.0,
+      "duration_ms": 0.0,
+      "metadata": {}
+    }
+  ],
+  "total_cost_usd": 0.02,
+  "total_tokens": 0,
+  "total_duration_ms": 0.0,
+  "total_llm_calls": 2,
+  "total_tool_calls": 0,
+  "test_name": "book_flight_basic",
+  "agent_name": "booking_agent",
+  "framework": "",
+  "metadata": {}
+}
