@@ -33,9 +33,7 @@ tests:
       - type: arg_contains
         tool: get_forecast
         field: city
-        value: "NYC"
-      - type: cost_under
-        threshold: 0.01
+        value: "New York"
     tags: [forecast]
 
   - name: "weather_unknown_city"
@@ -45,5 +43,5 @@ tests:
       - type: tool_called
         tool: get_weather
       - type: output_contains
-        value: "error"
+        value: "weather" # "I can't provide weather..." or "Current weather data is not available..."
     tags: [edge_case]

@@ -1,0 +1,11 @@
+
+name: "mock_agent_tests"
+agent: "examples.mock_agent.agent:run_agent"
+mocks: "examples/mock_agent/mocks.yaml"
+
+tests:
+  - name: "basic_search"
+    input: "hello"
+    assertions:
+      - type: output_contains
+        value: "Default Result"

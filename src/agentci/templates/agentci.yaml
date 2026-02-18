@@ -1,0 +1,16 @@
+# agentci.yaml — Default Configuration
+name: "my_agent_tests"
+agent: "agent:run_agent"  # Path to your agent function (module:function)
+framework: "generic"
+
+defaults:
+  max_cost_usd: 0.10
+  max_steps: 10
+
+tests:
+  - name: "demo_test"
+    description: "A simple test to verify the agent works"
+    input: "Hello world"
+    assertions:
+      - type: cost_under
+        threshold: 0.01

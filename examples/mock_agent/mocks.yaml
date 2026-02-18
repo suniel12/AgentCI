@@ -1,0 +1,8 @@
+
+search:
+  default:
+    - title: "Default Result"
+      url: "http://example.com"
+  
+  error_case:
+    error: "Search failed"

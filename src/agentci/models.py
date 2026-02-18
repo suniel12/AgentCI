@@ -210,6 +210,7 @@ class TestSuite(BaseModel):
     name: str = "default"
     agent: str = ""                    # Import path: "myapp.agent:run_agent"
     framework: str = "generic"         # "langgraph", "crewai", "generic"
+    mocks: str | None = None           # Path to mocks.yaml
     tests: list[TestCase] = []
     
     # Suite-level defaults

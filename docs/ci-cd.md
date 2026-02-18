@@ -1,19 +1,42 @@
-# CI/CD Setup
+# Continuous Integration with GitHub Actions
 
-Agent CI is designed to run in GitHub Actions, GitLab CI, and other CI providers.
+AgentCI is designed to run in your CI/CD pipeline to catch regressions before they hit production.
 
-## GitHub Actions
+## Quick Setup
 
-Copy the template from `.github/workflows/agentci-template.yml` to your repo.
+1. Copy the template from `.github/workflows/agentci-template.yml` to your repository's `.github/workflows/` directory.
+
+```bash
+mkdir -p .github/workflows
+cp path/to/agentci-template.yml .github/workflows/agentci.yml
+```
+
+2. Set your API keys in the GitHub Repository Settings -> Security -> Secrets and variables -> Actions.
+    - `OPENAI_API_KEY`
+    - `ANTHROPIC_API_KEY`
+
+3. The action will now run on every push and pull request.
+
+## Configuration
+
+The default template runs the following command:
 
 ```yaml
-jobs:
-  agent-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install
-        run: pip install agentci
-      - name: Run Tests
-        run: agentci run --ci
+run: agentci run --ci --fail-on-cost 0.50
+```
+
+- `--ci`: Ensures the process exits with code 1 if any test fails or errors.
+- `--fail-on-cost 0.50`: Fails the build if the total cost of the test suite exceeds $0.50.
+
+## Artifacts
+
+The workflow is configured to upload an HTML report of the test results. You can find this in the "Artifacts" section of your GitHub Action run summary.
+
+```yaml
+- name: Upload test report
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: agentci-report
+    path: agentci-report.html
 ```

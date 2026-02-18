@@ -38,12 +38,25 @@ class TestRunner:
     def run_suite(self, runs: int = 1) -> SuiteResult:
         """Execute all tests in the suite."""
         agent_fn = self._import_agent()
+        
+        # Load mocks if configured
+        mock_toolkit = None
+        if self.suite.mocks:
+            from .mocks import MockToolkit
+            # Assuming relative path from config location? 
+            # ideally config loading resolves absolute paths, but here we assume CWD or absolute
+            try:
+                mock_toolkit = MockToolkit.from_yaml(self.suite.mocks)
+            except Exception as e:
+                # TODO: Bubble up error properly
+                print(f"Warning: Failed to load mocks from {self.suite.mocks}: {e}")
+
         suite_result = SuiteResult(suite_name=self.suite.name)
         start_time = time.perf_counter()
         
         for test in self.suite.tests:
             for _ in range(runs):
-                run_result = self.run_test(test, agent_fn)
+                run_result = self.run_test(test, agent_fn, mock_toolkit)
                 suite_result.results.append(run_result)
                 
                 if run_result.result == TestResult.PASSED:
@@ -58,26 +71,44 @@ class TestRunner:
         
         return suite_result
 
-    def run_test(self, test: Any, agent_fn: Callable) -> RunResult:
+    def run_test(self, test: Any, agent_fn: Callable, mock_toolkit: Any = None) -> RunResult:
         """Run a single test case."""
         start_time = time.perf_counter()
         
         with TraceContext(agent_name=self.suite.agent, test_name=test.name) as ctx:
             try:
+                # Prepare arguments
+                import inspect
+                sig = inspect.signature(agent_fn)
+                kwargs = {}
+                
+                # If mocks are active, try to inject them
+                if mock_toolkit:
+                    # Reset mocks for this test run
+                    mock_toolkit.reset_all()
+                    
+                    # If user defines a scenario tag for this test, we could set it?
+                    # For now, let's look for "scenario" in test metadata or assertions?
+                    # Let's simple pass the toolkit if the agent accepts 'tools' or 'toolkit'
+                    if "tools" in sig.parameters:
+                        # Pass dictionary of tools or the toolkit object? 
+                        # Let's pass the toolkit object so they can .get("name")
+                        # Or maybe a dict of callables? 
+                        # The MockToolkit has .tools which is dict[str, MockTool]
+                        kwargs["tools"] = mock_toolkit.tools
+                    elif "toolkit" in sig.parameters:
+                        kwargs["toolkit"] = mock_toolkit
+
                 # Execute the agent
-                if test.input_data:
-                    result = agent_fn(test.input_data)
+                if test.input_data is not None:
+                     result = agent_fn(test.input_data, **kwargs)
                 else:
-                    # Try calling without args, or with empty string if it fails?
-                    # For now, just call it. If it needs args, it will raise TypeError, which is fair.
-                    # Actually, for the demo agent, it needs a string. 
-                    # Let's try to be smart: if input_data is None, pass "" if it looks like it wants a string?
-                    # No, let's just respect the signature.
+                    # Try calling without args if input is None
                     try:
-                        result = agent_fn()
+                        result = agent_fn(**kwargs)
                     except TypeError:
-                         # Fallback: maybe it requires one argument?
-                         result = agent_fn("")
+                         # Fallback: maybe it requires one argument (input)?
+                         result = agent_fn("", **kwargs)
                 
                 # Update span with result
                 ctx.trace.spans[0].output_data = result

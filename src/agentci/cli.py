@@ -20,14 +20,64 @@ console = Console()
 @click.version_option()
 def cli():
     """Agent CI — Continuous Integration for AI Agents"""
+    # Load .env variables
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+    
+    # Ensure current directory is in sys.path so we can import agents
+    import sys
+    import os
+    if os.getcwd() not in sys.path:
+        sys.path.insert(0, os.getcwd())
     pass
 
 
 @cli.command()
 def init():
     """Scaffold a new Agent CI test suite."""
-    # Creates: agentci.yaml, golden/, demo test case
-    pass
+    import shutil
+    import os
+    from rich.prompt import Confirm
+
+    # Paths
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    templates_dir = os.path.join(base_dir, "templates")
+    
+    target_config = "agentci.yaml"
+    target_golden_dir = "golden"
+    target_golden_file = os.path.join(target_golden_dir, "demo_test.golden.json")
+
+    # 1. Create agentci.yaml
+    if os.path.exists(target_config):
+        console.print(f"[yellow]Warning:[/] {target_config} already exists.")
+        if not Confirm.ask("Overwrite it?", default=False):
+            console.print("Skipped config creation.")
+        else:
+            shutil.copy(os.path.join(templates_dir, "agentci.yaml"), target_config)
+            console.print(f"[green]Created {target_config}[/]")
+    else:
+        shutil.copy(os.path.join(templates_dir, "agentci.yaml"), target_config)
+        console.print(f"[green]Created {target_config}[/]")
+
+    # 2. Create golden directory and sample trace
+    if not os.path.exists(target_golden_dir):
+        os.makedirs(target_golden_dir)
+        console.print(f"[green]Created {target_golden_dir}/[/]")
+    
+    if os.path.exists(target_golden_file):
+        # Don't overwrite golden traces usually
+        pass
+    else:
+        shutil.copy(os.path.join(templates_dir, "golden", "demo_test.golden.json"), target_golden_file)
+        console.print(f"[green]Created {target_golden_file}[/]")
+
+    console.print("\n[bold green]Init complete![/]")
+    console.print("Next steps:")
+    console.print("1. Edit [cyan]agentci.yaml[/] to point to your agent function.")
+    console.print("2. Run [cyan]agentci run[/] to see the demo test pass (or fail if agent not found).")
 
 
 from .config import load_config
