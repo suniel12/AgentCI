@@ -10,9 +10,17 @@ Commands:
   agentci report        Generate HTML report from last run
 """
 
+import os
+import sys
+import shutil
 import click
 from rich.console import Console
 from rich.table import Table
+from rich.prompt import Confirm
+
+from .config import load_config
+from .runner import TestRunner
+from .models import TestResult
 
 console = Console()
 
@@ -38,17 +46,46 @@ def cli():
 @cli.command()
 def init():
     """Scaffold a new Agent CI test suite."""
-    import shutil
-    import os
-    from rich.prompt import Confirm
 
-    # Paths
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    templates_dir = os.path.join(base_dir, "templates")
-    
     target_config = "agentci.yaml"
     target_golden_dir = "golden"
     target_golden_file = os.path.join(target_golden_dir, "demo_test.golden.json")
+
+    AGENTCI_YAML_TEMPLATE = """name: "Agent CI Demo Suite"
+description: "A simple suite to verify Agent CI works"
+
+tests:
+  - name: "demo_test"
+    description: "Verify the mock flight search agent returns results"
+    golden_trace: "golden/demo_test.golden.json"
+    tags: ["demo"]
+    assertions:
+      - type: "tool_called"
+        tool: "search_flights"
+      - type: "cost_under"
+        threshold: 0.05
+"""
+    
+    GOLDEN_JSON_TEMPLATE = """{
+  "trace_id": "trace_demo_123",
+  "total_cost_usd": 0.001,
+  "total_tokens": 150,
+  "total_duration_ms": 45.0,
+  "total_llm_calls": 1,
+  "total_tool_calls": 1,
+  "spans": [
+    {
+      "span_id": "span_1",
+      "name": "mock_agent_run",
+      "tool_calls": [
+        {
+          "tool_name": "search_flights",
+          "arguments": {"origin": "SFO", "destination": "JFK"}
+        }
+      ]
+    }
+  ]
+}"""
 
     # 1. Create agentci.yaml
     if os.path.exists(target_config):
@@ -56,10 +93,12 @@ def init():
         if not Confirm.ask("Overwrite it?", default=False):
             console.print("Skipped config creation.")
         else:
-            shutil.copy(os.path.join(templates_dir, "agentci.yaml"), target_config)
+            with open(target_config, "w") as f:
+                f.write(AGENTCI_YAML_TEMPLATE)
             console.print(f"[green]Created {target_config}[/]")
     else:
-        shutil.copy(os.path.join(templates_dir, "agentci.yaml"), target_config)
+        with open(target_config, "w") as f:
+            f.write(AGENTCI_YAML_TEMPLATE)
         console.print(f"[green]Created {target_config}[/]")
 
     # 2. Create golden directory and sample trace
@@ -68,22 +107,19 @@ def init():
         console.print(f"[green]Created {target_golden_dir}/[/]")
     
     if os.path.exists(target_golden_file):
-        # Don't overwrite golden traces usually
         pass
     else:
-        shutil.copy(os.path.join(templates_dir, "golden", "demo_test.golden.json"), target_golden_file)
+        with open(target_golden_file, "w") as f:
+            f.write(GOLDEN_JSON_TEMPLATE)
         console.print(f"[green]Created {target_golden_file}[/]")
 
-    console.print("\n[bold green]Init complete![/]")
+    console.print("\\n[bold green]Init complete![/]")
     console.print("Next steps:")
     console.print("1. Edit [cyan]agentci.yaml[/] to point to your agent function.")
     console.print("2. Run [cyan]agentci run[/] to see the demo test pass (or fail if agent not found).")
 
 
-from .config import load_config
-from .runner import TestRunner
-from .models import TestResult
-
+from collections import defaultdict
 @cli.command()
 @click.option('--suite', '-s', default='agentci.yaml', help='Path to test suite YAML')
 @click.option('--runs', '-n', default=1, help='Number of runs for statistical mode')

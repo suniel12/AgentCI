@@ -6,7 +6,7 @@ The demo agent ships with these pre-configured.
 """
 
 from typing import Any, Callable
-from agentci.models import ToolCall
+from .models import ToolCall
 
 
 class MockTool:
@@ -116,3 +116,99 @@ class MockToolkit:
     def reset_all(self) -> None:
         for tool in self.tools.values():
             tool.reset()
+
+
+class AnthropicMocker:
+    """
+    Simulates a multi-turn Anthropic Claude agent loop.
+    
+    Instead of developers writing a 150-line fake client that parses 
+    `messages` and yields `stop_reason="tool_use"`, this mocker
+    takes a predetermined sequence of tool calls and automatically
+    advances the simulation step-by-step.
+    
+    Usage:
+        client = AnthropicMocker(
+            mock_responses=[
+                # Turn 1: Claude decides to call search()
+                {"tool": "search_flights", "input": {"origin": "SFO"}},
+                
+                # Turn 2: Claude decides to book
+                {"tool": "book_flight", "input": {"id": 123}},
+                
+                # Turn 3: Claude finishes and replies
+                {"text": "I have booked your flight! Confirmation ABC."}
+            ]
+        )
+        my_agent.client = client
+    """
+    
+    def __init__(self, mock_responses: list[dict[str, Any]]):
+        self.mock_responses = mock_responses
+        self.turn_index = 0
+        
+        # Build the mock client structure that resembles anthropic.AsyncAnthropic
+        from unittest.mock import AsyncMock, MagicMock
+        
+        self.client = AsyncMock()
+        self.client.messages.create = AsyncMock(side_effect=self._mock_create)
+        
+    async def _mock_create(self, **kwargs) -> Any:
+        from unittest.mock import MagicMock
+        import json
+        import uuid
+        
+        if self.turn_index >= len(self.mock_responses):
+            # Fallback if the agent keeps calling
+            response = MagicMock()
+            response.stop_reason = "end_turn"
+            
+            text_block = MagicMock()
+            text_block.type = "text"
+            text_block.text = "Agent stopped because mock sequence ended."
+            text_block.model_dump.return_value = {"type": "text", "text": text_block.text}
+            
+            response.content = [text_block]
+            response.usage.input_tokens = 10
+            response.usage.output_tokens = 10
+            return response
+            
+        current_step = self.mock_responses[self.turn_index]
+        self.turn_index += 1
+        
+        response = MagicMock()
+        response.usage.input_tokens = 100
+        response.usage.output_tokens = 50
+        
+        if "tool" in current_step:
+            response.stop_reason = "tool_use"
+            
+            tool_block = MagicMock()
+            tool_block.type = "tool_use"
+            tool_block.id = f"toolu_{uuid.uuid4().hex[:16]}"
+            tool_block.name = current_step["tool"]
+            tool_block.input = current_step.get("input", {})
+            
+            tool_block.model_dump.return_value = {
+                "type": "tool_use", 
+                "id": tool_block.id, 
+                "name": tool_block.name, 
+                "input": tool_block.input
+            }
+            
+            response.content = [tool_block]
+            
+        elif "text" in current_step:
+            response.stop_reason = "end_turn"
+            
+            text_block = MagicMock()
+            text_block.type = "text"
+            text_block.text = current_step["text"]
+            text_block.model_dump.return_value = {"type": "text", "text": text_block.text}
+            
+            response.content = [text_block]
+            
+        else:
+            raise ValueError(f"Invalid mock response format at step {self.turn_index}: {current_step}")
+            
+        return response

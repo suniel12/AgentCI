@@ -5,7 +5,12 @@ Each assertion takes a Trace and returns (passed: bool, message: str).
 Designed to be composable and extensible.
 """
 
-from .models import Trace, Assertion
+from agentci.models import Trace, Assertion
+from typing import Callable, Any, TypeVar, cast
+import os
+import json
+from functools import wraps
+from typing import Callable, Any
 
 
 def evaluate_assertion(assertion: Assertion, trace: Trace) -> tuple[bool, str]:
@@ -95,3 +100,103 @@ def _assert_output_not_contains(a: Assertion, t: Trace) -> tuple[bool, str]:
     if str(a.value) not in final_output:
         return True, f"✓ Output correctly excludes '{a.value}'"
     return False, f"✗ Output unexpectedly contains '{a.value}'"
+
+
+# --- Phase 1 Learnings: Streamlined Golden Trace Assertions ---
+
+def assert_golden_match(current_trace: Trace, golden_file_path: str, update_golden: bool = False, config_dir: str = ".") -> None:
+    """
+    Asserts that the current trace matches the saved golden trace.
+    If update_golden is True (e.g. from --update-golden CLI flag), overwrites the file instead.
+    
+    Raises AssertionError if the diff engine finds errors (like tools removed, cost spiked).
+    """
+    from agentci.diff_engine import diff_traces
+    from agentci.models import DiffType
+    
+    # Resolve the path relative to where tests run
+    import pathlib
+    resolved_path = pathlib.Path(config_dir) / golden_file_path
+    if not resolved_path.suffix:
+        resolved_path = resolved_path.with_suffix('.json')
+        
+    full_path = str(resolved_path)
+        
+    if update_golden:
+        # Create parent directories if needed
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, "w") as f:
+            f.write(current_trace.model_dump_json(indent=2))
+        return
+
+    if not os.path.exists(full_path):
+        raise FileNotFoundError(f"Golden trace not found: {full_path}. Run with --update-golden to create it.")
+
+    with open(full_path, "r") as f:
+        golden_data = json.load(f)
+        golden_trace = Trace.model_validate(golden_data)
+
+    diffs = diff_traces(current_trace, golden_trace)
+    errors = [d.message for d in diffs if d.severity == "error"]
+
+    if errors:
+        error_msg = "\n".join(f"- {e}" for e in errors)
+        raise AssertionError(f"Agent Trace diverged from Golden Trace ({golden_file_path}):\n{error_msg}")
+
+
+# --- Phase 0 Learnings: Declarative Guardrails ---
+
+T = TypeVar('T')
+
+def assert_budget(max_cost: float = float('inf'), max_tokens: int = 1000000) -> Callable[[Any], Any]:
+    """
+    Decorator to wrap an agent execution function and assert it stays within budget.
+    """
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            trace = func(*args, **kwargs)
+            if not isinstance(trace, Trace):
+                return trace
+            
+            if trace.total_cost_usd > max_cost:
+                raise AssertionError(f"Budget Exceeded: Agent cost ${trace.total_cost_usd:.4f} > max allowed ${max_cost:.4f}")
+            
+            if trace.total_tokens > max_tokens:
+                raise AssertionError(f"Budget Exceeded: Agent used {trace.total_tokens} tokens > max allowed {max_tokens}")
+            
+            return trace
+        return wrapper
+    return decorator
+
+
+def truncate_tokens(max_tokens: int = 8000) -> Callable[[Any], Any]:
+    """
+    Decorator to automatically truncate a tool's string output to prevent LLM context limit blowouts.
+    Roughly estimates tokens as characters // 4.
+    """
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            result = func(*args, **kwargs)
+            
+            # Simple heuristic truncation
+            max_chars = max_tokens * 4
+            
+            if isinstance(result, str):
+                if len(result) > max_chars:
+                    return result[:max_chars] + f"\n\n...[TRUNCATED: Exceeded {max_tokens} token limit]"
+                return result
+            
+            if isinstance(result, dict):
+                import json
+                try:
+                    str_result = json.dumps(result)
+                    if len(str_result) > max_chars:
+                        return {"error": f"Tool output truncated. Exceeded {max_tokens} token limit. Original size: {len(str_result)} chars."}
+                except (TypeError, ValueError):
+                    pass
+            
+            return result
+        return wrapper
+    return decorator
