@@ -18,6 +18,9 @@ from agentci.models import TestResult
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
+import sys
+sys.path.insert(0, str(PROJECT_ROOT))
+
 # Import agent modules to access their mock activation functions.
 # The import order matters: the last OpenAI-patching agent imported
 # will have its mock active. We use _activate_mock/_deactivate_mock
