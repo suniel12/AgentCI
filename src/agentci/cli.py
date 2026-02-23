@@ -44,79 +44,88 @@ def cli():
 
 
 @cli.command()
-def init():
-    """Scaffold a new Agent CI test suite."""
-
-    target_config = "agentci.yaml"
-    target_golden_dir = "golden"
-    target_golden_file = os.path.join(target_golden_dir, "demo_test.golden.json")
-
-    AGENTCI_YAML_TEMPLATE = """name: "Agent CI Demo Suite"
-description: "A simple suite to verify Agent CI works"
-
-tests:
-  - name: "demo_test"
-    description: "Verify the mock flight search agent returns results"
-    golden_trace: "golden/demo_test.golden.json"
-    tags: ["demo"]
-    assertions:
-      - type: "tool_called"
-        tool: "search_flights"
-      - type: "cost_under"
-        threshold: 0.05
-"""
+@click.option('--hook', is_flag=True, help='Also install a .git/hooks/pre-push script')
+@click.option('--force', is_flag=True, help='Overwrite existing files')
+def init(hook, force):
+    """Scaffold a new AgentCI test suite and CI/CD pipeline."""
+    import jinja2
     
-    GOLDEN_JSON_TEMPLATE = """{
-  "trace_id": "trace_demo_123",
-  "total_cost_usd": 0.001,
-  "total_tokens": 150,
-  "total_duration_ms": 45.0,
-  "total_llm_calls": 1,
-  "total_tool_calls": 1,
-  "spans": [
-    {
-      "span_id": "span_1",
-      "name": "mock_agent_run",
-      "tool_calls": [
-        {
-          "tool_name": "search_flights",
-          "arguments": {"origin": "SFO", "destination": "JFK"}
-        }
-      ]
+    # Auto-detect project characteristics
+    dependency_file = "requirements.txt"
+    if os.path.exists("pyproject.toml"):
+        dependency_file = "pyproject.toml"
+        
+    test_path = "tests/"
+    if not os.path.exists("tests") and os.path.exists("test"):
+        test_path = "test/"
+        
+    # Python version (defaulting to current running version)
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    
+    template_data = {
+        "python_version": python_version,
+        "dependency_file": dependency_file,
+        "test_path": test_path
     }
-  ]
-}"""
-
-    # 1. Create agentci.yaml
-    if os.path.exists(target_config):
-        console.print(f"[yellow]Warning:[/] {target_config} already exists.")
-        if not Confirm.ask("Overwrite it?", default=False):
-            console.print("Skipped config creation.")
-        else:
-            with open(target_config, "w") as f:
-                f.write(AGENTCI_YAML_TEMPLATE)
-            console.print(f"[green]Created {target_config}[/]")
-    else:
-        with open(target_config, "w") as f:
-            f.write(AGENTCI_YAML_TEMPLATE)
-        console.print(f"[green]Created {target_config}[/]")
-
-    # 2. Create golden directory and sample trace
-    if not os.path.exists(target_golden_dir):
-        os.makedirs(target_golden_dir)
-        console.print(f"[green]Created {target_golden_dir}/[/]")
     
-    if os.path.exists(target_golden_file):
-        pass
+    # Set up Jinja environment pointing to the templates package
+    from pathlib import Path
+    template_dir = Path(__file__).parent / "templates"
+    
+    # If templates aren't packaged (e.g. during dev), fallback to basic string replacement
+    # We'll use a simple manual replacement if jinja2 fails to load the file
+    github_action_dest = Path(".github/workflows/agentci.yml")
+    pre_push_dest = Path(".git/hooks/pre-push")
+    
+    # 1. Create GitHub Actions Workflow
+    github_action_dest.parent.mkdir(parents=True, exist_ok=True)
+    if github_action_dest.exists() and not force:
+        console.print(f"[yellow]Skipped:[/] {github_action_dest} already exists. Use --force to overwrite.")
     else:
-        with open(target_golden_file, "w") as f:
-            f.write(GOLDEN_JSON_TEMPLATE)
-        console.print(f"[green]Created {target_golden_file}[/]")
+        template_path = template_dir / "github_action.yml.j2"
+        try:
+            with open(template_path, "r") as f:
+                template_str = f.read()
+            import jinja2
+            template = jinja2.Template(template_str)
+            content = template.render(**template_data)
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/] Could not load Jinja template ({e}). Using fallback.")
+            content = f"# Scaffolded by AgentCI\n# Test Path: {test_path}\n# Deps: {dependency_file}\n"
+            
+        with open(github_action_dest, "w") as f:
+            f.write(content)
+        console.print(f"[green]✓ Created[/] {github_action_dest}")
+        
+    # 2. Create Pre-push Hook (if requested)
+    if hook:
+        if not Path(".git").exists():
+            console.print("[red]Error:[/] Not a git repository. Cannot install pre-push hook.")
+        else:
+            pre_push_dest.parent.mkdir(parents=True, exist_ok=True)
+            if pre_push_dest.exists() and not force:
+                console.print(f"[yellow]Skipped:[/] {pre_push_dest} already exists.")
+            else:
+                template_path = template_dir / "pre_push_hook.sh.j2"
+                try:
+                    with open(template_path, "r") as f:
+                        template_str = f.read()
+                    template = jinja2.Template(template_str)
+                    content = template.render(**template_data)
+                except Exception as e:
+                    content = f"#!/bin/sh\npytest {test_path} -m 'not live'"
+                
+                with open(pre_push_dest, "w") as f:
+                    f.write(content)
+                os.chmod(pre_push_dest, 0o755)  # Make executable
+                console.print(f"[green]✓ Installed[/] {pre_push_dest}")
 
-    console.print("\\n[bold green]Init complete![/]")
-    console.print("Next steps:")
-    console.print("1. Edit [cyan]agentci.yaml[/] to point to your agent function.")
-    console.print("2. Run [cyan]agentci run[/] to see the demo test pass (or fail if agent not found).")
+    console.print("\n[bold green]AgentCI Initialization Complete! 🚀[/]")
+    console.print("\n[bold]Next Steps:[/]")
+    console.print("1. Commit the newly generated files: [cyan]git add .github/[/]")
+    console.print("2. Add [cyan]ANTHROPIC_API_KEY[/] to your GitHub repository secrets.")
+    console.print(f"3. Push your code to see the CI run: [cyan]git push[/]")
+
 
 
 from collections import defaultdict

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# AgentCI pre-push hook
+# Prevents pushing broken agent logic to remote by running deterministic tests locally.
+
+echo "🤖 AgentCI: Running deterministic pre-push tests..."
+
+# Run pytest on the test directory, excluding live LLM tests
+pytest {{ test_path }} -m "not live" --tb=short
+
+TEST_EXIT_CODE=$?
+
+if [ $TEST_EXIT_CODE -ne 0 ]; then
+    echo "❌ AgentCI: Pre-push tests failed! Please fix the errors before pushing."
+    echo "   (To bypass this hook temporarily, use: git push --no-verify)"
+    exit 1
+fi
+
+echo "✅ AgentCI: Pre-push tests passed."
+exit 0
