@@ -1,18 +1,10 @@
 [project]
 name = "agentci"
-version = "0.1.0"
+version = "0.1.1"
 description = "Continuous Integration for AI Agents. Catch cost spikes and logic regressions before production."
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
-authors = [
-  {name = "Sunil Pandey", email = "sunil@closure.ai"},
-]
-urls = {
-  Documentation = "https://github.com/agentci-org/agentci#readme",
-  Repository = "https://github.com/agentci-org/agentci.git",
-  Issues = "https://github.com/agentci-org/agentci/issues",
-}
 keywords = ["ai", "agents", "testing", "llm", "ci-cd", "regression"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -20,6 +12,8 @@ classifiers = [
     "Topic :: Software Development :: Testing",
     "Framework :: Pytest",
 ]
+
+
 
 dependencies = [
     "pydantic>=2.0",
@@ -30,6 +24,11 @@ dependencies = [
     "opentelemetry-sdk>=1.20",
     "pytest>=7.0",
 ]
+
+[project.urls]
+Documentation = "https://github.com/agentci-org/agentci#readme"
+Repository = "https://github.com/agentci-org/agentci.git"
+Issues = "https://github.com/agentci-org/agentci/issues"
 
 [project.optional-dependencies]
 openai = ["openai>=1.0"]

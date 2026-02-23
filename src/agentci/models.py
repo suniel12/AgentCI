@@ -89,6 +89,7 @@ class Span(BaseModel):
     # Execution data
     input_data: Any = None             # What the agent/tool received
     output_data: Any = None            # What it returned
+    graph_state: dict[str, Any] = {}   # Raw state snapshot for framework-specific parsing
     
     # Collected events
     tool_calls: list[ToolCall] = []
@@ -135,6 +136,7 @@ class Trace(BaseModel):
     test_name: str = ""
     agent_name: str = ""
     framework: str = ""    # "langgraph", "crewai", "generic"
+    graph_state: dict[str, Any] = {} # Final state of the graph
     metadata: dict[str, Any] = {}
 
     def compute_metrics(self) -> None:

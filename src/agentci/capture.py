@@ -171,3 +171,50 @@ class TraceContext:
             )
         except ImportError:
             pass
+            
+    def attach_langgraph_state(self, state: dict) -> None:
+        """
+        Explicitly parse a LangGraph MessagesState object to natively extract 
+        tools, node executions, and message details without relying on monkey-patches.
+        """
+        import json
+        
+        # Save snapshot
+        self.trace.graph_state = state
+        
+        span = _active_span.get()
+        if not span:
+            return
+            
+        span.graph_state = state
+        
+        # Extract reasoning trajectory from LangGraph messages
+        messages = state.get("messages", [])
+        for msg in messages:
+            msg_name = getattr(msg, "name", "")
+            
+            # If the message is emitted from a distinct node (e.g. grade_artifacts, rewrite_question), 
+            # log it as a lightweight ToolCall so it appears in the sequence
+            if msg_name and msg_name not in ["retrieve_docs"]:  
+                span.tool_calls.append(ToolCall(
+                    tool_name=msg_name,
+                    arguments={"content": getattr(msg, "content", "")}
+                ))
+            
+            # Extract standard tool calls natively from AIMessage.tool_calls
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    # Langchain encodes tools as dicts
+                    t_name = tc.get("name", "")
+                    t_args = tc.get("args", {})
+                    
+                    if not isinstance(t_args, dict):
+                        try:
+                            t_args = json.loads(t_args)
+                        except:
+                            t_args = {"raw": str(t_args)}
+                            
+                    span.tool_calls.append(ToolCall(
+                        tool_name=t_name,
+                        arguments=t_args
+                    ))
