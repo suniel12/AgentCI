@@ -13,3 +13,4 @@ except Exception:
 # Expose the test decorator
 from .pytest_plugin import test
 from .capture import TraceContext
+from .diff_engine import diff, load_baseline

@@ -10,6 +10,40 @@ Phase 2: Add semantic matching via LLM-as-Judge for fuzzy comparison.
 """
 
 from .models import Trace, DiffResult, DiffType
+import os
+import json
+
+class DiffReport:
+    """Wrapper around diff results for easy assertions."""
+    def __init__(self, diffs: list[DiffResult]):
+        self.diffs = diffs
+        # Any error-severity diff is considered a regression
+        self.has_regression = any(d.severity == "error" for d in diffs)
+        self.summary = ", ".join([d.message for d in diffs]) if diffs else "No regressions"
+
+def diff(golden: Trace, current: Trace) -> DiffReport:
+    """Compare traces and return a report object for assertions."""
+    from .diff_engine import diff_traces
+    return DiffReport(diff_traces(current, golden))
+
+def load_baseline(name: str) -> dict[str, Trace]:
+    """
+    Load a saved baseline (a collection of traces).
+    For now, we expect them to be saved in golden/{name}.json
+    Returns a dict mapping test_name (or query) -> Trace object.
+    """
+    path = f"golden/{name}.json"
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Baseline {path} not found")
+        
+    with open(path, "r") as f:
+        data = json.load(f)
+        
+    resolved = {}
+    for key, trace_data in data.items():
+        resolved[key] = Trace(**trace_data)
+        
+    return resolved
 
 
 def diff_traces(current: Trace, golden: Trace) -> list[DiffResult]:
