@@ -31,7 +31,6 @@ jobs:
       run: |
         # Install the package in editable mode
         pip install -e .
-        pip install langgraph
         
         # Run the demo agent tests
         # We need to set PYTHONPATH so the agent code can be imported
