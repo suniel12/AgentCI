@@ -33,7 +33,7 @@ tests:
       - type: arg_contains
         tool: get_forecast
         field: city
-        value: "New York"
+        value: "NYC"
     tags: [forecast]
 
   - name: "weather_unknown_city"
