@@ -130,6 +130,8 @@ class AgentCITraceProcessor:
                 metadata={
                     "handoffs": getattr(span_data, "handoffs", []),
                     "tools": getattr(span_data, "tools", []),
+                    "instructions": getattr(span_data, "instructions", ""),
+                    "handoff_description": getattr(span_data, "handoff_description", ""),
                 },
             )
 

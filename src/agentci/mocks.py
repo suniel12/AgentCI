@@ -212,3 +212,236 @@ class AnthropicMocker:
             raise ValueError(f"Invalid mock response format at step {self.turn_index}: {current_step}")
             
         return response
+
+class OpenAIMocker:
+    """
+    Simulates a multi-turn OpenAI Chat Completions agent loop.
+    
+    Instead of making live API calls, this mocker takes a predetermined 
+    sequence of tool calls and text responses and automatically advances 
+    the simulation step-by-step.
+    
+    Usage:
+        client = OpenAIMocker(
+            mock_responses=[
+                # Turn 1: Assistant calls search()
+                {"tool": "search_flights", "arguments": {"origin": "SFO"}},
+                
+                # Turn 2: Assistant finishes and replies
+                {"text": "I have found flights from SFO."}
+            ]
+        )
+        # Inject the mocked async check completions client into your agent runner
+        openai_client.chat.completions.create = client._mock_create
+    """
+    
+    def __init__(self, mock_responses: list[dict[str, Any]]):
+        self.mock_responses = mock_responses
+        self.turn_index = 0
+        
+        # Build the mock client structure
+        from unittest.mock import AsyncMock, MagicMock
+        self.client = AsyncMock()
+        # Mock the legacy Chat Completions API
+        self.client.chat.completions.create = AsyncMock(side_effect=self._mock_chat_create)
+        # Mock the new Responses API used by OpenAI Agents SDK
+        self.client.responses.create = AsyncMock(side_effect=self._mock_responses_create)
+        
+    async def _mock_responses_create(self, **kwargs) -> Any:
+        import json
+        import uuid
+        from unittest.mock import MagicMock
+        
+        if self.turn_index >= len(self.mock_responses):
+            response = MagicMock()
+            response.id = f"resp_{uuid.uuid4().hex[:16]}"
+            response.model = "mock-model"
+            
+            class MockUsage:
+                def __init__(self, pt, ct):
+                    self.prompt_tokens = pt
+                    self.completion_tokens = ct
+                    self.total_tokens = pt + ct
+                    self.input_tokens = pt
+                    self.output_tokens = ct
+                    self.input_tokens_details = None
+                    self.output_tokens_details = None
+            response.usage = MockUsage(10, 10)
+            
+            response.output = [{
+                "id": f"msg_{uuid.uuid4().hex[:16]}",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{
+                    "type": "output_text", 
+                    "text": "Agent stopped because mock sequence ended.",
+                    "annotations": []
+                }]
+            }]
+            return response
+            
+        current_step = self.mock_responses[self.turn_index]
+        self.turn_index += 1
+        
+        response = MagicMock()
+        response.id = f"resp_{uuid.uuid4().hex[:16]}"
+        response.model = "mock-model"
+        
+        class MockUsage:
+            def __init__(self, pt, ct):
+                self.prompt_tokens = pt
+                self.completion_tokens = ct
+                self.total_tokens = pt + ct
+                self.input_tokens = pt
+                self.output_tokens = ct
+                self.input_tokens_details = None
+                self.output_tokens_details = None
+        
+        response.usage = MockUsage(
+            current_step.get("prompt_tokens", 100),
+            current_step.get("completion_tokens", 50)
+        )
+        
+        if "tool" in current_step:
+            args_dict = current_step.get("arguments", {})
+            response.output = [{
+                "type": "function_call",
+                "name": current_step["tool"],
+                "call_id": f"call_{uuid.uuid4().hex[:24]}",
+                "arguments": json.dumps(args_dict)
+            }]
+            
+        elif "tools" in current_step:
+            items = []
+            for tool_def in current_step["tools"]:
+                items.append({
+                    "type": "function_call",
+                    "name": tool_def["tool"],
+                    "call_id": f"call_{uuid.uuid4().hex[:24]}",
+                    "arguments": json.dumps(tool_def.get("arguments", {}))
+                })
+            response.output = items
+            
+        elif "text" in current_step:
+            response.output = [{
+                "id": f"msg_{uuid.uuid4().hex[:16]}",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{
+                    "type": "output_text", 
+                    "text": current_step["text"],
+                    "annotations": []
+                }]
+            }]
+            
+        else:
+            raise ValueError(f"Invalid mock response format at step {self.turn_index}: {current_step}")
+            
+        return response
+
+    async def _mock_chat_create(self, **kwargs) -> Any:
+        import json
+        import uuid
+        from unittest.mock import MagicMock
+        
+        if self.turn_index >= len(self.mock_responses):
+            # Fallback if the agent keeps calling
+            response = MagicMock()
+            
+            message = MagicMock()
+            message.content = "Agent stopped because mock sequence ended."
+            message.tool_calls = None
+            message.role = "assistant"
+            
+            choice = MagicMock()
+            choice.message = message
+            choice.finish_reason = "stop"
+            
+            response.choices = [choice]
+            class MockUsage:
+                def __init__(self, pt, ct):
+                    self.prompt_tokens = pt
+                    self.completion_tokens = ct
+                    self.total_tokens = pt + ct
+                    self.input_tokens = pt
+                    self.output_tokens = ct
+                    self.input_tokens_details = None
+                    self.output_tokens_details = None
+            response.usage = MockUsage(10, 10)
+            return response
+            
+        current_step = self.mock_responses[self.turn_index]
+        self.turn_index += 1
+        
+        response = MagicMock()
+        class MockUsage:
+            def __init__(self, pt, ct):
+                self.prompt_tokens = pt
+                self.completion_tokens = ct
+                self.total_tokens = pt + ct
+                self.input_tokens = pt
+                self.output_tokens = ct
+                self.input_tokens_details = None
+                self.output_tokens_details = None
+        
+        response.usage = MockUsage(
+            current_step.get("prompt_tokens", 100),
+            current_step.get("completion_tokens", 50)
+        )
+        
+        choice = MagicMock()
+        message = MagicMock()
+        message.role = "assistant"
+        
+        if "tool" in current_step:
+            choice.finish_reason = "tool_calls"
+            message.content = None
+            
+            tool_call = MagicMock()
+            tool_call.id = f"call_{uuid.uuid4().hex[:24]}"
+            tool_call.type = "function"
+            
+            function = MagicMock()
+            function.name = current_step["tool"]
+            # OpenAI requires arguments to be a JSON string
+            args_dict = current_step.get("arguments", {})
+            function.arguments = json.dumps(args_dict)
+            
+            tool_call.function = function
+            
+            message.tool_calls = [tool_call]
+            
+        elif "tools" in current_step:
+            # Parallel tool calls
+            choice.finish_reason = "tool_calls"
+            message.content = None
+            
+            tool_calls = []
+            for tcl in current_step["tools"]:
+                tc = MagicMock()
+                tc.id = f"call_{uuid.uuid4().hex[:24]}"
+                tc.type = "function"
+                
+                fn = MagicMock()
+                fn.name = tcl["tool"]
+                fn.arguments = json.dumps(tcl.get("arguments", {}))
+                
+                tc.function = fn
+                tool_calls.append(tc)
+                
+            message.tool_calls = tool_calls
+            
+        elif "text" in current_step:
+            choice.finish_reason = "stop"
+            message.content = current_step["text"]
+            message.tool_calls = None
+            
+        else:
+            raise ValueError(f"Invalid mock response format at step {self.turn_index}: {current_step}")
+            
+        choice.message = message
+        response.choices = [choice]
+            
+        return response
