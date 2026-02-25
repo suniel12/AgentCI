@@ -42,6 +42,8 @@ class DiffType(str, Enum):
     STEPS_CHANGED = "steps_changed"       # Different number of LLM calls
     STOP_REASON_CHANGED = "stop_reason_changed" # LLM or Span exited for a different reason than golden baseline
     ROUTING_CHANGED = "routing_changed"           # Handoff target changed between runs
+    GUARDRAILS_CHANGED = "guardrails_changed"     # Different guardrails triggered
+    AVAILABLE_HANDOFFS_CHANGED = "available_handoffs_changed"  # Available routing options changed
 
 
 class TestResult(str, Enum):
@@ -194,6 +196,14 @@ class Trace(BaseModel):
     def agents_involved(self) -> list[str]:
         """Ordered list of agent names that executed."""
         return [s.name for s in self.spans if s.kind == SpanKind.AGENT]
+
+    @property
+    def available_handoffs(self) -> list[list[str]]:
+        """Available handoff targets from each AGENT span's metadata."""
+        return [
+            s.metadata.get("handoffs", [])
+            for s in self.spans if s.kind == SpanKind.AGENT
+        ]
 
 
 # ── Test Definition Models ─────────────────────────────

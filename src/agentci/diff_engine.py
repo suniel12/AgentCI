@@ -53,6 +53,51 @@ def diff_traces(current: Trace, golden: Trace) -> list[DiffResult]:
     """
     diffs: list[DiffResult] = []
     
+    # 0. HANDOFF / ROUTING DIFF
+    current_handoffs = [h.to_agent for h in current.get_handoffs()]
+    golden_handoffs = [h.to_agent for h in golden.get_handoffs()]
+    
+    if current_handoffs != golden_handoffs:
+        diffs.append(DiffResult(
+            diff_type=DiffType.ROUTING_CHANGED,
+            severity="error",
+            message=f"Routing changed: {golden_handoffs} → {current_handoffs}",
+            details={
+                "golden_routing": golden_handoffs,
+                "current_routing": current_handoffs,
+            }
+        ))
+    
+    # 0a. GUARDRAIL DIFF
+    current_guardrails = current.guardrails_triggered
+    golden_guardrails = golden.guardrails_triggered
+
+    if set(current_guardrails) != set(golden_guardrails):
+        diffs.append(DiffResult(
+            diff_type=DiffType.GUARDRAILS_CHANGED,
+            severity="error",
+            message=f"Guardrails changed: {golden_guardrails} → {current_guardrails}",
+            details={
+                "golden_guardrails": golden_guardrails,
+                "current_guardrails": current_guardrails,
+            }
+        ))
+
+    # 0b. AVAILABLE HANDOFFS DIFF
+    current_available = current.available_handoffs
+    golden_available = golden.available_handoffs
+
+    if current_available != golden_available:
+        diffs.append(DiffResult(
+            diff_type=DiffType.AVAILABLE_HANDOFFS_CHANGED,
+            severity="warning",
+            message=f"Available handoff options changed",
+            details={
+                "golden_available": golden_available,
+                "current_available": current_available,
+            }
+        ))
+
     # 1. TOOL SEQUENCE DIFF
     current_tools = current.tool_call_sequence
     golden_tools = golden.tool_call_sequence
