@@ -1,4 +1,4 @@
--e git+ssh://git@github.com/suniel12/AgentCI.git@0dc3f4ebe086be59ec5192e0daeeb5c01b3c1dad#egg=agentci
+# Core dependencies (also specified in pyproject.toml)
 annotated-types==0.7.0
 anthropic==0.80.0
 anyio==4.12.1
