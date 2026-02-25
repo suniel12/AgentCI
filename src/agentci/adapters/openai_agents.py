@@ -164,9 +164,23 @@ class AgentCITraceProcessor:
             )
 
         elif type_name == "FunctionSpanData":
+            # FunctionSpanData.input is str | None, parse as JSON if possible
+            raw_input = getattr(span_data, "input", None)
+            arguments = {}
+            if raw_input and isinstance(raw_input, str):
+                import json
+                try:
+                    parsed = json.loads(raw_input)
+                    if isinstance(parsed, dict):
+                        arguments = parsed
+                except (json.JSONDecodeError, TypeError):
+                    arguments = {"raw_input": raw_input}
+            elif isinstance(raw_input, dict):
+                arguments = raw_input
+
             tool_call = ToolCall(
                 tool_name=getattr(span_data, "name", ""),
-                arguments=getattr(span_data, "input", {}) if isinstance(getattr(span_data, "input", None), dict) else {},
+                arguments=arguments,
                 result=getattr(span_data, "output", None),
             )
             return Span(
@@ -186,6 +200,35 @@ class AgentCITraceProcessor:
                 name=getattr(span_data, "name", ""),
                 guardrail_name=getattr(span_data, "name", ""),
                 guardrail_triggered=getattr(span_data, "triggered", False),
+                duration_ms=duration_ms,
+            )
+
+        elif type_name == "ResponseSpanData":
+            # Responses API span — extract usage from the response object
+            response = getattr(span_data, "response", None)
+            tokens_in = 0
+            tokens_out = 0
+            model = ""
+            if response:
+                model = getattr(response, "model", "")
+                usage = getattr(response, "usage", None)
+                if usage:
+                    tokens_in = getattr(usage, "input_tokens", 0) or 0
+                    tokens_out = getattr(usage, "output_tokens", 0) or 0
+
+            llm_call = LLMCall(
+                model=model,
+                provider="openai",
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                duration_ms=duration_ms,
+            )
+            return Span(
+                span_id=span_id,
+                parent_span_id=parent_id,
+                kind=SpanKind.LLM_CALL,
+                name="response",
+                llm_calls=[llm_call],
                 duration_ms=duration_ms,
             )
 
