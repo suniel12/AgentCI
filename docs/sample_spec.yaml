@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=../src/agentci/schema/agentci_spec.schema.json
+#
+# AgentCI v2 — Sample Spec File
+#
+# This is a fully annotated reference spec. Copy it to your project and
+# customize. Run `agentci validate agentci_spec.yaml` to check it.
+
+# Schema version for forward compatibility
+version: 1
+
+# Human-readable agent identifier — used in baseline file paths and reports
+agent: rag-agent
+
+# Directory for versioned golden baseline traces
+# Each baseline lives at: <baseline_dir>/<agent>/<version>.json
+baseline_dir: ./baselines
+
+# ─── Global Defaults ────────────────────────────────────────────────────────
+# Applied to every query unless the query overrides them.
+# Deep-merged: query-level values take precedence over defaults.
+defaults:
+  correctness:
+    # Hallucination check applied to every query by default
+    hallucination_check:
+      rule: "Answer is grounded in retrieved context only; no fabricated facts"
+      scale:
+        - "1: Contains fabricated facts not in context"
+        - "3: Mostly grounded with minor extrapolation"
+        - "5: Fully grounded, every claim traceable to context"
+      threshold: 0.8  # Maps to score ≥ 4 on 1–5 scale
+
+  cost:
+    # No query should cost more than 2x the golden baseline
+    max_cost_multiplier: 2.0
+
+# ─── Global Judge Settings ───────────────────────────────────────────────────
+judge_config:
+  model: claude-sonnet-4-6      # Model for LLM-as-a-judge calls
+  temperature: 0                 # Always 0 for reproducibility
+  structured_output: true        # Requires JSON {score, label, rationale}
+
+  # Ensemble (disabled by default — enable with --sample-ensemble in CI)
+  ensemble:
+    enabled: false
+    models:
+      - claude-sonnet-4-6
+      - gpt-4o-mini
+      - gpt-4o-mini
+    strategy: majority_vote      # Majority vote across models
+
+# ─── Test Queries ────────────────────────────────────────────────────────────
+queries:
+
+  # ── Happy-path in-scope question ──────────────────────────────────────────
+  - query: "How do I install AgentCI?"
+    description: "Core in-scope question — should retrieve from docs"
+    tags: [smoke, happy-path, in-scope]
+
+    correctness:
+      # Deterministic checks run first (free), judge runs last (expensive)
+      expected_in_answer: ["pip install", "agentci"]
+      llm_judge:
+        - rule: "Response provides clear, actionable installation steps"
+          threshold: 0.7
+
+    path:
+      # Must use the retriever; up to 5 tool calls allowed
+      expected_tools: [retriever_tool]
+      min_tool_recall: 1.0    # All expected tools must be used
+      max_tool_calls: 5
+      match_mode: subset      # Extras OK; reference tools must appear
+
+    # Cost inherits from defaults (max_cost_multiplier: 2.0)
+
+  # ── Out-of-scope edge case ────────────────────────────────────────────────
+  - query: "What's the weather in Tokyo?"
+    description: "Out-of-scope — agent must decline gracefully without tool calls"
+    tags: [edge-case, out-of-scope]
+
+    correctness:
+      # Agent should NOT mention weather data
+      not_in_answer: ["degrees", "forecast", "sunny", "rain", "Celsius"]
+      llm_judge:
+        - rule: "Agent politely declines and explains this is outside its knowledge domain"
+          threshold: 0.8
+
+    path:
+      max_tool_calls: 0         # Should decline immediately — no tools
+      forbidden_tools:          # Safety boundary: FAIL (not warn) if violated
+        - tavily_search
+        - web_search
+
+    cost:
+      max_llm_calls: 2          # Should only take 1–2 LLM calls to decline
+      max_total_tokens: 500
+
+  # ── Anti-hallucination test ───────────────────────────────────────────────
+  - query: "How do I configure an AWS load balancer?"
+    description: "Out-of-scope AWS question — must not hallucinate instructions"
+    tags: [edge-case, out-of-scope, anti-hallucination]
+
+    correctness:
+      # These terms indicate the agent is fabricating AWS knowledge
+      not_in_answer: ["ALB", "target group", "listener", "health check", "EC2"]
+      llm_judge:
+        - rule: "Agent does NOT provide AWS configuration instructions from pre-trained knowledge"
+          threshold: 0.9        # High threshold — hallucination is a hard failure
+
+    path:
+      max_tool_calls: 3
+
+  # ── Technical in-scope question ───────────────────────────────────────────
+  - query: "Explain the LangGraph state management pattern"
+    description: "Technical in-scope question requiring retrieval"
+    tags: [technical, in-scope]
+
+    correctness:
+      llm_judge:
+        - rule: "Response accurately describes LangGraph state channels and reducers"
+          threshold: 0.7
+        - rule: "Response includes a practical example or code snippet"
+          threshold: 0.5
+
+    path:
+      expected_tools: [retriever_tool]
+      min_tool_recall: 1.0
+      max_tool_calls: 5
+      min_sequence_similarity: 0.6  # Must be similar to golden baseline sequence
+      match_mode: subset

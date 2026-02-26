@@ -67,3 +67,30 @@ class BaselineError(AgentCIError):
     Raised when baseline files are missing or cannot be loaded.
     """
     pass
+
+
+class JudgeError(AgentCIError):
+    """Errors related to LLM-as-a-judge evaluation.
+
+    Raised when judge API calls fail, responses cannot be parsed,
+    or required API keys are missing.
+    """
+    pass
+
+
+class SchemaError(AgentCIError):
+    """Errors related to agentci_spec.yaml schema validation.
+
+    Raised when spec files fail Pydantic validation or contain
+    unsupported field values.
+    """
+    pass
+
+
+class EngineError(AgentCIError):
+    """Errors raised by the evaluation engine.
+
+    Raised when the correctness, path, or cost evaluation layers
+    encounter an unexpected runtime error.
+    """
+    pass
