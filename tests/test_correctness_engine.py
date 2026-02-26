@@ -218,3 +218,92 @@ class TestDetailsPopulated:
         result = evaluate_correctness("hello world", spec(not_in_answer=["hello"]))
         assert "not_in_answer" in result.details
         assert "hello" in result.details["not_in_answer"]["found"]
+
+
+# ── refutes_premise (Milestone 3.3) ───────────────────────────────────────────
+
+
+class TestRefutesPremise:
+    """When refutes_premise: True, a built-in rubric is injected and
+    keyword checks are skipped."""
+
+    def test_refutes_premise_injects_builtin_rubric(self):
+        """When refutes_premise=True, the built-in premise-correction rubric runs."""
+        s = spec(refutes_premise=True)
+        with patch(
+            "agentci.engine.correctness._run_judge_safe",
+            return_value=judge_pass(),
+        ) as mock_judge:
+            result = evaluate_correctness("That feature doesn't exist; here's what does", s)
+        assert result.status == LayerStatus.PASS
+        # Built-in rubric must have been called (at least one call)
+        assert mock_judge.call_count >= 1
+        # The built-in rubric text should appear in the first call
+        first_rubric = mock_judge.call_args_list[0][0][1]  # positional arg 1 = rubric
+        assert "false premise" in first_rubric.rule.lower() or "premise" in first_rubric.rule.lower()
+
+    def test_refutes_premise_builtin_rubric_fails(self):
+        """When the built-in rubric fails (vague deflection), result is FAIL."""
+        s = spec(refutes_premise=True)
+        with patch(
+            "agentci.engine.correctness._run_judge_safe",
+            return_value=judge_fail(),
+        ):
+            result = evaluate_correctness("I'm not sure about that.", s)
+        assert result.status == LayerStatus.FAIL
+
+    def test_refutes_premise_user_rubrics_also_run(self):
+        """User-defined llm_judge rubrics run in addition to the built-in one."""
+        user_rubric = JudgeRubric(rule="Offers an alternative", threshold=0.6)
+        s = spec(refutes_premise=True, llm_judge=[user_rubric])
+        with patch(
+            "agentci.engine.correctness._run_judge_safe",
+            return_value=judge_pass(),
+        ) as mock_judge:
+            result = evaluate_correctness("Feature X doesn't exist; try Feature Y", s)
+        assert result.status == LayerStatus.PASS
+        # Built-in + 1 user rubric = 2 total calls
+        assert mock_judge.call_count == 2
+
+    def test_refutes_premise_skips_expected_in_answer(self):
+        """When refutes_premise=True, expected_in_answer is NOT checked."""
+        # Answer does NOT contain "pip install", but refutes_premise skips that check
+        s = spec(refutes_premise=True, expected_in_answer=["pip install"])
+        with patch(
+            "agentci.engine.correctness._run_judge_safe",
+            return_value=judge_pass(),
+        ):
+            result = evaluate_correctness("That feature does not exist.", s)
+        # Should pass because expected_in_answer is skipped in refutes_premise mode
+        assert result.status == LayerStatus.PASS
+
+    def test_refutes_premise_skips_not_in_answer(self):
+        """When refutes_premise=True, not_in_answer is NOT checked."""
+        # Answer CONTAINS "error" which would normally fail not_in_answer
+        s = spec(refutes_premise=True, not_in_answer=["error"])
+        with patch(
+            "agentci.engine.correctness._run_judge_safe",
+            return_value=judge_pass(),
+        ):
+            result = evaluate_correctness("There is an error in your premise.", s)
+        # Should pass because not_in_answer is skipped in refutes_premise mode
+        assert result.status == LayerStatus.PASS
+
+    def test_refutes_premise_false_default_no_change(self):
+        """refutes_premise=False (default) → normal evaluation, no builtin rubric."""
+        s = spec(refutes_premise=False, expected_in_answer=["pip"])
+        with patch("agentci.engine.correctness._run_judge_safe") as mock_judge:
+            result = evaluate_correctness("no keyword here", s)
+        # Normal flow: keyword check fails, judge not called
+        mock_judge.assert_not_called()
+        assert result.status == LayerStatus.FAIL
+
+    def test_refutes_premise_details_flag(self):
+        """refutes_premise: True adds 'refutes_premise': True to details."""
+        s = spec(refutes_premise=True)
+        with patch(
+            "agentci.engine.correctness._run_judge_safe",
+            return_value=judge_pass(),
+        ):
+            result = evaluate_correctness("Correcting your premise...", s)
+        assert result.details.get("refutes_premise") is True

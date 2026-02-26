@@ -7,14 +7,18 @@ See tests/integration/test_judge_live.py for real API tests.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from agentci.engine.judge import (
+    JudgeError,
     JudgeVerdict,
     _build_judge_system_prompt,
     _build_judge_user_prompt,
+    _load_context_file,
     _parse_verdict,
     _run_ensemble,
     _score_threshold,
@@ -275,3 +279,93 @@ class TestRunEnsemble:
         with patch("agentci.engine.judge._call_judge", side_effect=verdicts) as mock:
             _run_ensemble("sys", "user", self._ensemble_config(models), rubric)
         assert mock.call_count == 3
+
+
+# ── context_file (Milestone 3.4) ──────────────────────────────────────────────
+
+
+class TestContextFile:
+    """Tests for context_file loading and doc-grounded prompt injection."""
+
+    def _make_rubric_with_context(self, context_file: str) -> JudgeRubric:
+        return JudgeRubric(
+            rule="Answer matches the reference document",
+            threshold=0.8,
+            context_file=context_file,
+        )
+
+    def test_context_file_content_injected_into_prompt(self):
+        """When context_file is set, its content appears in the judge prompt."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8"
+        ) as f:
+            f.write("The SLA uptime guarantee is 99.9%.\n")
+            tmp_path = f.name
+
+        try:
+            rubric = self._make_rubric_with_context(tmp_path)
+            verdict = make_verdict(score=4, label="pass")
+            with patch("agentci.engine.judge._call_judge", return_value=verdict) as mock_call:
+                run_judge("The uptime is 99.9%.", rubric, spec_dir=None)
+
+            # Inspect the user prompt passed to _call_judge
+            call_args = mock_call.call_args
+            user_prompt = call_args[0][2]  # positional: model, system, user
+            assert "99.9%" in user_prompt
+            assert "GROUND TRUTH REFERENCE DOCUMENT" in user_prompt
+        finally:
+            os.unlink(tmp_path)
+
+    def test_context_file_none_no_change_to_behavior(self):
+        """When context_file is None, existing behavior is unchanged."""
+        rubric = make_rubric()  # no context_file
+        verdict = make_verdict(score=4)
+        with patch("agentci.engine.judge._call_judge", return_value=verdict) as mock_call:
+            run_judge("Some answer", rubric)
+        user_prompt = mock_call.call_args[0][2]
+        assert "GROUND TRUTH REFERENCE DOCUMENT" not in user_prompt
+
+    def test_context_file_missing_raises_judge_error(self):
+        """When context_file does not exist, JudgeError is raised."""
+        rubric = self._make_rubric_with_context("/nonexistent/path/file.md")
+        with pytest.raises(JudgeError, match="not found"):
+            run_judge("Any answer", rubric, spec_dir=None)
+
+    def test_context_file_resolved_relative_to_spec_dir(self):
+        """context_file path is resolved relative to spec_dir."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ref_file = os.path.join(tmpdir, "sla.md")
+            with open(ref_file, "w") as f:
+                f.write("SLA content here.")
+
+            rubric = self._make_rubric_with_context("sla.md")
+            verdict = make_verdict(score=4, label="pass")
+            with patch("agentci.engine.judge._call_judge", return_value=verdict) as mock_call:
+                run_judge("SLA content here.", rubric, spec_dir=tmpdir)
+            user_prompt = mock_call.call_args[0][2]
+            assert "SLA content here." in user_prompt
+
+    def test_load_context_file_directly_raises_judge_error(self):
+        """_load_context_file raises JudgeError with actionable message on missing file."""
+        with pytest.raises(JudgeError) as exc_info:
+            _load_context_file("does_not_exist.md", spec_dir=None)
+        assert "not found" in str(exc_info.value)
+        assert "Fix:" in str(exc_info.value)
+
+    def test_doc_grounded_prompt_excludes_prior_knowledge_instruction(self):
+        """Doc-grounded prompt includes instruction to ignore prior knowledge."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8"
+        ) as f:
+            f.write("Pricing: $29/month for Pro plan.")
+            tmp_path = f.name
+
+        try:
+            rubric = self._make_rubric_with_context(tmp_path)
+            verdict = make_verdict(score=4)
+            with patch("agentci.engine.judge._call_judge", return_value=verdict) as mock_call:
+                run_judge("Pro plan costs $29/month.", rubric, spec_dir=None)
+            user_prompt = mock_call.call_args[0][2]
+            assert "prior training knowledge" in user_prompt or "prior knowledge" in user_prompt
+        finally:
+            os.unlink(tmp_path)

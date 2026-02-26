@@ -101,11 +101,11 @@ def evaluate_path(
             )
 
     # ── 6. loop detection ────────────────────────────────────────────────────
-    if spec.max_loops is not None:
-        loops = detect_loops(used_tools)
-        details["loops_detected"] = loops
-        if loops > spec.max_loops:
-            warnings.append(f"Loops: {loops} > max {spec.max_loops}")
+    # max_loops always has a value (default=3); always run loop detection
+    loops = detect_loops(used_tools)
+    details["loops_detected"] = loops
+    if loops > spec.max_loops:
+        warnings.append(f"Loops: {loops} > max {spec.max_loops}")
 
     # ── 7. match mode (vs baseline) ──────────────────────────────────────────
     if baseline_trace is not None:

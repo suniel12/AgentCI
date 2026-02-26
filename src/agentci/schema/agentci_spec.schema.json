@@ -114,6 +114,12 @@
           ],
           "default": null,
           "description": "Hallucination / grounding evaluation rubric"
+        },
+        "refutes_premise": {
+          "default": false,
+          "description": "When True, the agent is expected to correct a false premise in the query. Skips expected_in_answer/not_in_answer checks (they don't apply to refutals) and injects a built-in 'false premise correction' rubric into llm_judge.",
+          "title": "Refutes Premise",
+          "type": "boolean"
         }
       },
       "title": "CorrectnessSpec",
@@ -265,6 +271,14 @@
             }
           ],
           "default": null
+        },
+        "span_assertions": {
+          "description": "Span-level assertions evaluated against trace data. Hard-fails on any assertion failure (like Correctness layer). Use to assert on data flowing between nodes/tools.",
+          "items": {
+            "$ref": "#/$defs/SpanAssertionSpec"
+          },
+          "title": "Span Assertions",
+          "type": "array"
         }
       },
       "required": [
@@ -321,6 +335,19 @@
           "default": null,
           "description": "Example input/output/score triples for calibration",
           "title": "Few Shot Examples"
+        },
+        "context_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Path to a reference document used as ground truth for this rubric. The judge is instructed to evaluate the answer ONLY against this file's contents, ignoring prior training knowledge. Path is resolved relative to the spec file location.",
+          "title": "Context File"
         }
       },
       "required": [
@@ -390,18 +417,11 @@
           "title": "Forbidden Tools"
         },
         "max_loops": {
-          "anyOf": [
-            {
-              "minimum": 1,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Maximum consecutive repeated tool invocations (loop detection)",
-          "title": "Max Loops"
+          "default": 3,
+          "description": "Maximum consecutive repeated tool invocations (loop detection). Default 3.",
+          "minimum": 1,
+          "title": "Max Loops",
+          "type": "integer"
         },
         "match_mode": {
           "$ref": "#/$defs/MatchMode",
@@ -499,6 +519,128 @@
       },
       "title": "PathSpec",
       "type": "object"
+    },
+    "SpanAssert": {
+      "description": "A single assertion on a field within a matched span.",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/SpanAssertType",
+          "description": "Assertion type: contains, not_contains, regex, equals, or llm_judge"
+        },
+        "field": {
+          "description": "Dotted path to the span field to extract, e.g. 'attributes.tool.args.query' or 'output_data'",
+          "title": "Field",
+          "type": "string"
+        },
+        "rule": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Natural language rule for llm_judge assertions",
+          "title": "Rule"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Expected value for contains, not_contains, regex, or equals assertions",
+          "title": "Value"
+        },
+        "threshold": {
+          "default": 0.8,
+          "description": "Minimum passing score for llm_judge assertions (normalised 0\u20131)",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "field"
+      ],
+      "title": "SpanAssert",
+      "type": "object"
+    },
+    "SpanAssertType": {
+      "description": "The type of assertion to perform on a span field.",
+      "enum": [
+        "llm_judge",
+        "contains",
+        "not_contains",
+        "regex",
+        "equals"
+      ],
+      "title": "SpanAssertType",
+      "type": "string"
+    },
+    "SpanAssertionSpec": {
+      "description": "Span-level assertion: select one or more spans and assert on their fields.",
+      "properties": {
+        "selector": {
+          "$ref": "#/$defs/SpanSelector",
+          "description": "Selects which span(s) to assert against"
+        },
+        "asserts": {
+          "description": "One or more assertions to run against each matched span",
+          "items": {
+            "$ref": "#/$defs/SpanAssert"
+          },
+          "minItems": 1,
+          "title": "Asserts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "selector",
+        "asserts"
+      ],
+      "title": "SpanAssertionSpec",
+      "type": "object"
+    },
+    "SpanKindSelector": {
+      "description": "Which type of span to target in span assertions.",
+      "enum": [
+        "TOOL",
+        "NODE",
+        "HANDOFF",
+        "GUARDRAIL",
+        "LLM"
+      ],
+      "title": "SpanKindSelector",
+      "type": "string"
+    },
+    "SpanSelector": {
+      "description": "Selects a span from the trace by kind and name.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SpanKindSelector",
+          "description": "Type of span to target (TOOL, NODE, HANDOFF, GUARDRAIL, LLM)"
+        },
+        "name": {
+          "description": "Name of the tool, node, or agent to match",
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "title": "SpanSelector",
+      "type": "object"
     }
   },
   "description": "Root schema for agentci_spec.yaml.",
@@ -515,10 +657,23 @@
       "type": "string"
     },
     "baseline_dir": {
-      "type": "string",
       "default": "./golden",
       "description": "Path to the directory where versioned baseline JSON files are stored.",
-      "title": "Baseline Dir"
+      "title": "Baseline Dir",
+      "type": "string"
+    },
+    "runner": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Python dotted path to the agent runner callable, e.g. 'myagent.run:run_agent'. The function must accept (query: str) and return an agentci.models.Trace. When set, 'agentci test' can invoke the agent directly without pytest.",
+      "title": "Runner"
     },
     "defaults": {
       "anyOf": [

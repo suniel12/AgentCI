@@ -23,6 +23,10 @@ from typing import Any
 
 from agentci.engine.results import LayerStatus, QueryResult
 
+# GitHub limits visible inline annotations per job; exceeding this silently
+# drops annotations. Warnings are budget-capped; errors are always emitted.
+MAX_INLINE_ANNOTATIONS = 10
+
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
@@ -69,24 +73,68 @@ def _emit_github_annotations(results: list[QueryResult], spec_file: str) -> None
     """Emit GitHub Actions workflow commands for inline PR feedback.
 
     Format: ::level file=<path>::<message>
-    - ::error  → red, blocks merge
-    - ::warning → yellow, non-blocking
+    - ::error  → red, blocks merge (no cap — correctness failures always visible)
+    - ::warning → yellow, non-blocking (capped at MAX_INLINE_ANNOTATIONS)
+
+    Overflow warnings beyond the cap are written to GITHUB_STEP_SUMMARY so
+    they remain accessible without silently disappearing.
     """
+    warning_count = 0
+    overflow_warnings: list[str] = []
+
     for r in results:
         query_short = r.query[:60]
 
+        # Hard fails → always emit as ::error (no cap)
         if r.correctness.status == LayerStatus.FAIL:
             for msg in r.correctness.messages:
                 print(f"::error file={spec_file}::[CORRECTNESS] {query_short}: {msg}")
 
-        if r.path.status in (LayerStatus.FAIL, LayerStatus.WARN):
-            level = "error" if r.path.status == LayerStatus.FAIL else "warning"
+        if r.path.status == LayerStatus.FAIL:
             for msg in r.path.messages:
-                print(f"::{level} file={spec_file}::[PATH] {query_short}: {msg}")
+                print(f"::error file={spec_file}::[PATH] {query_short}: {msg}")
+
+        # Soft warnings → budget-capped
+        if r.path.status == LayerStatus.WARN:
+            for msg in r.path.messages:
+                annotation = f"[PATH] {query_short}: {msg}"
+                if warning_count < MAX_INLINE_ANNOTATIONS:
+                    print(f"::warning file={spec_file}::{annotation}")
+                    warning_count += 1
+                else:
+                    overflow_warnings.append(annotation)
 
         if r.cost.status == LayerStatus.WARN:
             for msg in r.cost.messages:
-                print(f"::warning file={spec_file}::[COST] {query_short}: {msg}")
+                annotation = f"[COST] {query_short}: {msg}"
+                if warning_count < MAX_INLINE_ANNOTATIONS:
+                    print(f"::warning file={spec_file}::{annotation}")
+                    warning_count += 1
+                else:
+                    overflow_warnings.append(annotation)
+
+    if overflow_warnings:
+        _write_step_summary(overflow_warnings)
+
+
+def _write_step_summary(messages: list[str]) -> None:
+    """Write overflow warning messages to the GitHub Actions step summary.
+
+    Appends a markdown table to $GITHUB_STEP_SUMMARY so that warnings
+    beyond MAX_INLINE_ANNOTATIONS remain accessible in the Actions UI.
+    """
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    try:
+        with open(summary_path, "a", encoding="utf-8") as fh:
+            fh.write("\n## AgentCI — Additional Warnings\n\n")
+            fh.write("| # | Warning |\n")
+            fh.write("|---|--------|\n")
+            for i, msg in enumerate(messages, start=1):
+                fh.write(f"| {i} | {msg} |\n")
+    except OSError:
+        pass  # Step summary write failure is non-fatal
 
 
 # ── Console Output ─────────────────────────────────────────────────────────────

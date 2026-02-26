@@ -180,10 +180,11 @@ class AgentCITraceProcessor:
             elif isinstance(raw_input, dict):
                 arguments = raw_input
 
+            raw_output = getattr(span_data, "output", None)
             tool_call = ToolCall(
                 tool_name=getattr(span_data, "name", ""),
                 arguments=arguments,
-                result=getattr(span_data, "output", None),
+                result=raw_output,
             )
             return Span(
                 span_id=span_id,
@@ -192,6 +193,10 @@ class AgentCITraceProcessor:
                 name=getattr(span_data, "name", ""),
                 tool_calls=[tool_call],
                 duration_ms=duration_ms,
+                attributes={
+                    "tool.args": arguments,
+                    "tool.result": raw_output,
+                },
             )
 
         elif type_name == "GuardrailSpanData":

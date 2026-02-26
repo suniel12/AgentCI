@@ -122,10 +122,13 @@ class TraceContext:
                         if tool_calls:
                             for tc in tool_calls:
                                 import json
+                                tool_args = json.loads(tc.function.arguments)
                                 span.tool_calls.append(ToolCall(
                                     tool_name=tc.function.name,
-                                    arguments=json.loads(tc.function.arguments),
+                                    arguments=tool_args,
                                 ))
+                                # Propagate tool args into span attributes
+                                span.attributes[f"tool.args.{tc.function.name}"] = tool_args
                 
                 return response
             
@@ -171,10 +174,13 @@ class TraceContext:
                     # Capture tool use blocks
                     for block in getattr(response, 'content', []):
                         if getattr(block, 'type', '') == 'tool_use':
+                            tool_args = block.input if isinstance(block.input, dict) else {}
                             span.tool_calls.append(ToolCall(
                                 tool_name=block.name,
-                                arguments=block.input if isinstance(block.input, dict) else {},
+                                arguments=tool_args,
                             ))
+                            # Propagate tool args into span attributes
+                            span.attributes[f"tool.args.{block.name}"] = tool_args
                 
                 return response
             

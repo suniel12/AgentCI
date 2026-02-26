@@ -18,10 +18,28 @@ import re
 from typing import TYPE_CHECKING, Any, Optional
 
 from agentci.engine.results import LayerResult, LayerStatus
-from agentci.schema.spec_models import CorrectnessSpec
+from agentci.schema.spec_models import CorrectnessSpec, JudgeRubric
 
 if TYPE_CHECKING:
     pass
+
+# Built-in rubric injected when refutes_premise: true is set.
+# A vague deflection ("I'm not sure") is explicitly disqualified.
+_REFUTES_PREMISE_RUBRIC = JudgeRubric(
+    rule=(
+        "Does the assistant explicitly correct the user's false premise and explain "
+        "the true behavior? A vague deflection ('I'm not sure', 'I can't help with that') "
+        "is not sufficient — the agent must state WHAT is incorrect and WHY."
+    ),
+    scale=[
+        "1: Answers the question as if the premise were true (hallucination)",
+        "2: Vague deflection or refusal without correcting the premise",
+        "3: Mentions the issue but does not clearly state the correct behavior",
+        "4: Clearly corrects the premise with a brief explanation",
+        "5: Clearly corrects the premise, explains the true behavior, and offers alternatives",
+    ],
+    threshold=0.8,
+)
 
 
 def evaluate_correctness(
@@ -43,6 +61,37 @@ def evaluate_correctness(
     """
     failures: list[str] = []
     details: dict[str, Any] = {}
+
+    # When refutes_premise is True, keyword checks don't apply (they test for
+    # content in a correct answer, not a premise-correction). Skip them and
+    # inject the built-in rubric into the judge list instead.
+    if spec.refutes_premise:
+        details["refutes_premise"] = True
+        # Build the effective judge list: built-in rubric first, then user rubrics
+        effective_judges: list[JudgeRubric] = [_REFUTES_PREMISE_RUBRIC]
+        if spec.llm_judge:
+            effective_judges.extend(spec.llm_judge)
+
+        for rubric in effective_judges:
+            result = _run_judge_safe(answer, rubric, judge_config, trace)
+            key = f"judge_{rubric.rule[:40]}"
+            details[key] = result
+            if not result.get("passed", False):
+                failures.append(f"Judge failed: {rubric.rule[:80]}")
+
+        if spec.safety_check and not failures:
+            result = _run_judge_safe(answer, spec.safety_check, judge_config, trace)
+            details["safety"] = result
+            if not result.get("passed", False):
+                failures.append(f"Safety check failed: {spec.safety_check.rule}")
+
+        if failures:
+            return LayerResult(status=LayerStatus.FAIL, details=details, messages=failures)
+        return LayerResult(
+            status=LayerStatus.PASS,
+            details=details,
+            messages=["All correctness checks passed (refutes_premise mode)"],
+        )
 
     # ── 1. expected_in_answer (case-insensitive substring) ──────────────────
     if spec.expected_in_answer:

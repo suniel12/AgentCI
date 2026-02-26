@@ -13,11 +13,16 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
 from agentci.schema.spec_models import JudgeRubric
+
+
+class JudgeError(Exception):
+    """Raised when the judge cannot run due to a configuration error."""
 
 
 # ── Output Schema ──────────────────────────────────────────────────────────────
@@ -78,14 +83,16 @@ def run_judge(
     rubric: JudgeRubric,
     config: Optional[dict[str, Any]] = None,
     context: Optional[str] = None,
+    spec_dir: Optional[str] = None,
 ) -> dict[str, Any]:
     """Execute an LLM-as-a-judge evaluation with safeguards.
 
     Args:
-        answer:  The agent's response text to evaluate.
-        rubric:  JudgeRubric describing the evaluation criterion.
-        config:  Optional judge config dict (model, temperature, ensemble).
-        context: Optional retrieved context for grounding checks.
+        answer:   The agent's response text to evaluate.
+        rubric:   JudgeRubric describing the evaluation criterion.
+        config:   Optional judge config dict (model, temperature, ensemble).
+        context:  Optional retrieved context for grounding checks.
+        spec_dir: Directory of the spec file, used to resolve context_file paths.
 
     Returns:
         dict with keys: passed, score, label, rationale, model
@@ -95,8 +102,13 @@ def run_judge(
     temperature = config.get("temperature", 0)  # Always default 0
     ensemble_cfg = config.get("ensemble", {})
 
+    # Load context_file content if specified
+    effective_context = context
+    if rubric.context_file:
+        effective_context = _load_context_file(rubric.context_file, spec_dir)
+
     system_prompt = _build_judge_system_prompt(rubric)
-    user_prompt = _build_judge_user_prompt(answer, rubric, context)
+    user_prompt = _build_judge_user_prompt(answer, rubric, effective_context)
 
     if ensemble_cfg.get("enabled", False):
         return _run_ensemble(system_prompt, user_prompt, ensemble_cfg, rubric)
@@ -112,6 +124,36 @@ def run_judge(
         "rationale": verdict.rationale,
         "model": model,
     }
+
+
+# ── Context File Loading ────────────────────────────────────────────────────────
+
+
+def _load_context_file(context_file: str, spec_dir: Optional[str]) -> str:
+    """Load a context reference file for doc-grounded judging.
+
+    Resolves the path relative to `spec_dir` (the directory containing the
+    agentci_spec.yaml). Falls back to CWD if spec_dir is not provided.
+
+    Raises:
+        JudgeError: If the file does not exist or cannot be read.
+    """
+    base_dir = Path(spec_dir) if spec_dir else Path.cwd()
+    file_path = (base_dir / context_file).resolve()
+
+    if not file_path.exists():
+        raise JudgeError(
+            f"context_file '{context_file}' not found at '{file_path}'. "
+            "Fix: ensure the path is correct relative to the spec file directory, "
+            "or use an absolute path."
+        )
+    try:
+        return file_path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise JudgeError(
+            f"context_file '{context_file}' could not be read: {e}. "
+            "Fix: check file permissions."
+        ) from e
 
 
 # ── Ensemble ───────────────────────────────────────────────────────────────────
@@ -271,7 +313,14 @@ def _build_judge_user_prompt(
 ) -> str:
     """Build the user-turn prompt for the judge."""
     parts = []
-    if context:
+    if context and rubric.context_file:
+        # Doc-grounded judging: instruct judge to use ONLY the reference document
+        parts.append(
+            f"GROUND TRUTH REFERENCE DOCUMENT:\n---\n{context}\n---\n"
+            "Evaluate the answer ONLY against this reference document. "
+            "Do NOT use prior training knowledge — only information in the document above.\n"
+        )
+    elif context:
         parts.append(f"RETRIEVED CONTEXT:\n{context}\n")
     parts.append(f"RESPONSE TO EVALUATE:\n{answer}")
     parts.append(
