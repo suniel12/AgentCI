@@ -352,7 +352,7 @@ def record(test_name, suite, output, output_json):
 @click.argument('test_name')
 @click.option('--suite', '-s', default='agentci.yaml')
 def diff(test_name, suite):
-    """Show diff between latest run and golden trace."""
+    """Show diff between latest run and golden trace (v1 — deprecated)."""
     pass
 
 
@@ -362,6 +362,185 @@ def diff(test_name, suite):
 def report(input, output):
     """Generate an HTML report from a JSON results file."""
     pass
+
+
+# ── v2 Commands ────────────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument('spec_path', type=click.Path(exists=True))
+def validate(spec_path):
+    """Validate an agentci_spec.yaml file against the schema.
+
+    Exits 0 on success, 1 on validation failure.
+    """
+    from .loader import load_spec
+    from .exceptions import ConfigError
+    from pydantic import ValidationError
+
+    try:
+        spec = load_spec(spec_path)
+        console.print(
+            f"[green]✅ Valid:[/] {len(spec.queries)} queries, agent='{spec.agent}'"
+        )
+        sys.exit(0)
+    except (ConfigError, ValidationError) as e:
+        console.print(f"[bold red]❌ Validation failed:[/]\n{e}", err=True)
+        sys.exit(1)
+
+
+@cli.command(name="test")
+@click.option('--config', '-c', default='agentci_spec.yaml',
+              help='Path to agentci_spec.yaml', show_default=True)
+@click.option('--tags', '-t', multiple=True, help='Only evaluate queries with these tags')
+@click.option('--format', 'fmt',
+              type=click.Choice(['console', 'github', 'json', 'prometheus']),
+              default='console', show_default=True, help='Output format')
+@click.option('--baseline-dir', default=None,
+              help='Override baseline directory from spec')
+def test_cmd(config, tags, fmt, baseline_dir):
+    """Run AgentCI v2 evaluation against a spec file.
+
+    Loads agentci_spec.yaml, runs the agent for each query (capturing traces),
+    evaluates all three layers, and reports results.
+
+    Exit codes:
+        0 — all correctness checks pass (warnings emitted as annotations)
+        1 — one or more correctness failures
+        2 — runtime / infrastructure error
+    """
+    from .loader import load_spec, filter_by_tags
+    from .engine.reporter import report_results
+    from .exceptions import ConfigError
+
+    try:
+        spec = load_spec(config)
+    except ConfigError as e:
+        console.print(f"[bold red]Config error:[/] {e}", err=True)
+        sys.exit(2)
+
+    if tags:
+        spec = filter_by_tags(spec, list(tags))
+        if not spec.queries:
+            console.print(f"[yellow]No queries match tags: {tags}[/]")
+            sys.exit(0)
+
+    effective_baseline_dir = baseline_dir or spec.baseline_dir
+
+    console.print(
+        f"[bold blue]AgentCI v2[/] evaluating [cyan]{len(spec.queries)}[/] "
+        f"queries for agent '[cyan]{spec.agent}[/]'"
+    )
+
+    # NOTE: This command requires the user to wire their agent into the runner.
+    # For now, emit a helpful message directing to the pytest plugin / Python API.
+    console.print(
+        "\n[yellow]ℹ[/] To run evaluations, import the Python API in your test suite:\n"
+        "  [cyan]from agentci import load_spec, evaluate_spec[/]\n\n"
+        "Or use the pytest plugin with the [cyan]agentci_trace[/] fixture.\n"
+        "Full CLI agent wiring coming in v2.1."
+    )
+    sys.exit(0)
+
+
+@cli.command(name="save")
+@click.option('--agent', required=True, help='Agent identifier (matches spec agent field)')
+@click.option('--version', required=True, help='Version tag, e.g. v1-broken or v2-fixed')
+@click.option('--query', 'query_text', default='', help='Query text this baseline corresponds to')
+@click.option('--config', '-c', default='agentci_spec.yaml', show_default=True)
+@click.option('--baseline-dir', default=None, help='Override baseline directory')
+@click.option('--force-save', is_flag=True,
+              help='Bypass correctness precheck and save anyway')
+@click.option('--trace-file', type=click.Path(exists=True), required=True,
+              help='Path to trace JSON file to save as baseline')
+def save_cmd(agent, version, query_text, config, baseline_dir, force_save, trace_file):
+    """Save a trace as a versioned golden baseline.
+
+    By default runs a correctness precheck against the spec before saving.
+    Use --force-save to bypass (e.g. for intentional "broken" demo baselines).
+    """
+    import json
+    from .loader import load_spec
+    from .baselines import save_baseline
+    from .models import Trace
+    from .exceptions import ConfigError
+
+    try:
+        spec = load_spec(config)
+    except ConfigError as e:
+        console.print(f"[bold red]Config error:[/] {e}", err=True)
+        sys.exit(2)
+
+    try:
+        trace_data = json.loads(open(trace_file).read())
+        trace = Trace.model_validate(trace_data)
+    except Exception as e:
+        console.print(f"[bold red]Failed to load trace:[/] {e}", err=True)
+        sys.exit(2)
+
+    effective_dir = baseline_dir or spec.baseline_dir
+
+    try:
+        out_path = save_baseline(
+            trace=trace,
+            agent=agent,
+            version=version,
+            spec=spec,
+            query_text=query_text,
+            baseline_dir=effective_dir,
+            force=force_save,
+        )
+        console.print(f"[green]✅ Saved baseline:[/] {out_path}")
+    except ValueError as e:
+        console.print(f"[bold red]Precheck failed:[/] {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Error:[/] {e}", err=True)
+        sys.exit(2)
+
+
+@cli.command(name="baselines")
+@click.option('--agent', required=True, help='Agent identifier')
+@click.option('--config', '-c', default='agentci_spec.yaml', show_default=True)
+@click.option('--baseline-dir', default=None)
+def baselines_cmd(agent, config, baseline_dir):
+    """List available baseline versions for an agent."""
+    from .baselines import list_baselines
+    from .loader import load_spec
+    from .exceptions import ConfigError
+
+    effective_dir = baseline_dir
+    if not effective_dir:
+        try:
+            spec = load_spec(config)
+            effective_dir = spec.baseline_dir
+        except ConfigError:
+            effective_dir = "./baselines"
+
+    entries = list_baselines(agent, effective_dir)
+    if not entries:
+        console.print(f"[yellow]No baselines found for agent '{agent}' in {effective_dir}[/]")
+        return
+
+    table = Table(title=f"Baselines: {agent}")
+    table.add_column("Version", style="cyan")
+    table.add_column("Captured At")
+    table.add_column("Query")
+    table.add_column("Precheck")
+    table.add_column("Spec Hash")
+
+    for e in entries:
+        meta = e.get("metadata", {})
+        precheck = "[green]✅[/]" if meta.get("precheck_passed") else "[yellow]⚠ forced[/]"
+        table.add_row(
+            e["version"],
+            e.get("captured_at", "—")[:19],  # Trim to datetime only
+            (e.get("query") or "—")[:50],
+            precheck,
+            (meta.get("spec_hash") or "—")[:16],
+        )
+
+    console.print(table)
 
 
 if __name__ == '__main__':
