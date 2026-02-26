@@ -111,6 +111,11 @@ class Span(BaseModel):
     # Extensible metadata
     metadata: dict[str, Any] = {}
 
+    # OTel-style structured attributes for span-level assertions.
+    # Convention: "tool.args.query", "tool.result", "llm.input", "node.output"
+    # Populated by adapters; empty dict by default (backward-compatible).
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
     # Handoff data (for HANDOFF spans)
     from_agent: str | None = None
     to_agent: str | None = None

@@ -7,11 +7,13 @@ Uses capsys to capture stdout output. Mocks os.environ for GitHub detection.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from unittest.mock import patch
 
 import pytest
 
-from agentci.engine.reporter import report_results
+from agentci.engine.reporter import MAX_INLINE_ANNOTATIONS, report_results
 from agentci.engine.results import LayerResult, LayerStatus, QueryResult
 
 
@@ -195,6 +197,100 @@ class TestConsoleOutput:
             report_results(results)
         out = capsys.readouterr().out
         assert "Results:" in out
+
+
+# ── Annotation Budget (1.2) ────────────────────────────────────────────────────
+
+
+class TestAnnotationBudget:
+    """GitHub annotations are capped at MAX_INLINE_ANNOTATIONS for warnings.
+    Errors (hard fails) are never capped. Overflow goes to step summary.
+    """
+
+    def _env_github(self):
+        return patch.dict("os.environ", {"GITHUB_ACTIONS": "true"})
+
+    def _make_warn_results(self, count: int, layer: str = "path") -> list[QueryResult]:
+        """Create `count` results each with one path/cost warning."""
+        results = []
+        for i in range(count):
+            if layer == "path":
+                r = make_result(query=f"Query {i}", path=warn_layer(f"Warning {i}"))
+            else:
+                r = make_result(query=f"Query {i}", cost=warn_layer(f"Warning {i}"))
+            results.append(r)
+        return results
+
+    def test_exactly_ten_warnings_emitted_for_fifteen_inputs(self, capsys):
+        """15 path warnings → exactly 10 ::warning lines (the budget cap)."""
+        with self._env_github():
+            results = self._make_warn_results(15)
+            report_results(results, format="console", spec_file="spec.yaml")
+        out = capsys.readouterr().out
+        warning_lines = [l for l in out.splitlines() if l.startswith("::warning")]
+        assert len(warning_lines) == MAX_INLINE_ANNOTATIONS
+
+    def test_error_annotations_not_capped(self, capsys):
+        """::error lines for hard fails are never capped."""
+        results = [
+            make_result(query=f"Q{i}", correctness=fail_layer(f"Fail {i}"))
+            for i in range(15)
+        ]
+        with self._env_github():
+            report_results(results, format="console", spec_file="spec.yaml")
+        out = capsys.readouterr().out
+        error_lines = [l for l in out.splitlines() if l.startswith("::error")]
+        assert len(error_lines) == 15  # All 15 emitted, no cap
+
+    def test_overflow_warnings_written_to_step_summary(self, capsys):
+        """Warnings beyond the budget are appended to GITHUB_STEP_SUMMARY."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            summary_path = f.name
+
+        try:
+            env = {"GITHUB_ACTIONS": "true", "GITHUB_STEP_SUMMARY": summary_path}
+            with patch.dict("os.environ", env):
+                results = self._make_warn_results(15)
+                report_results(results, format="console", spec_file="spec.yaml")
+
+            with open(summary_path) as f:
+                content = f.read()
+            assert "AgentCI" in content
+            assert "Warning" in content
+        finally:
+            os.unlink(summary_path)
+
+    def test_no_overflow_when_at_budget(self, capsys):
+        """Exactly MAX_INLINE_ANNOTATIONS warnings → no step summary written."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            summary_path = f.name
+
+        try:
+            env = {"GITHUB_ACTIONS": "true", "GITHUB_STEP_SUMMARY": summary_path}
+            with patch.dict("os.environ", env):
+                results = self._make_warn_results(MAX_INLINE_ANNOTATIONS)
+                report_results(results, format="console", spec_file="spec.yaml")
+
+            with open(summary_path) as f:
+                content = f.read()
+            # File was opened but nothing written (original was empty)
+            assert content == ""
+        finally:
+            os.unlink(summary_path)
+
+    def test_path_fail_emits_error_not_warning(self, capsys):
+        """PATH layer FAIL (forbidden tool) emits ::error, not ::warning."""
+        with self._env_github():
+            path_fail = LayerResult(
+                status=LayerStatus.FAIL,
+                details={},
+                messages=["Forbidden tool used: evil_tool"],
+            )
+            results = [make_result(correctness=fail_layer("Forbidden"), path=path_fail)]
+            report_results(results, format="console", spec_file="spec.yaml")
+        out = capsys.readouterr().out
+        path_lines = [l for l in out.splitlines() if "[PATH]" in l]
+        assert all(l.startswith("::error") for l in path_lines)
 
 
 # ── Prometheus Output ──────────────────────────────────────────────────────────

@@ -264,3 +264,44 @@ class TestEmptySpec:
         result = evaluate_path(trace, path())
         assert result.status == LayerStatus.PASS
         assert result.messages == ["Path OK"]
+
+
+# ── max_loops default (1.1) ───────────────────────────────────────────────────
+
+
+class TestMaxLoopsDefault:
+    def test_default_max_loops_is_three(self):
+        """PathSpec with no max_loops argument should default to 3."""
+        assert PathSpec().max_loops == 3
+
+    def test_normal_trace_passes_with_default(self):
+        """A trace with no loops passes with the default max_loops=3."""
+        trace = make_trace("a", "b", "c")
+        result = evaluate_path(trace, path())
+        assert result.status == LayerStatus.PASS
+
+    def test_four_loops_warns_with_default(self):
+        """5 consecutive identical calls → 4 loops > default 3 → WARN."""
+        trace = make_trace("a", "a", "a", "a", "a")  # loops=4
+        result = evaluate_path(trace, path())  # max_loops defaults to 3
+        assert result.status == LayerStatus.WARN
+        assert any("Loop" in m for m in result.messages)
+
+    def test_three_loops_passes_with_default(self):
+        """4 consecutive calls → 3 loops, not > 3 → PASS with default."""
+        trace = make_trace("a", "a", "a", "a")  # loops=3
+        result = evaluate_path(trace, path())
+        assert result.status == LayerStatus.PASS
+
+    def test_override_max_loops_disables_default_warning(self):
+        """Per-query override max_loops=10 should not warn for 4 loops."""
+        trace = make_trace("a", "a", "a", "a", "a")  # loops=4
+        result = evaluate_path(trace, path(max_loops=10))
+        assert result.status == LayerStatus.PASS
+
+    def test_details_always_contain_loops_detected(self):
+        """loops_detected is always in details now that max_loops has a default."""
+        trace = make_trace("a", "b", "c")
+        result = evaluate_path(trace, path())
+        assert "loops_detected" in result.details
+        assert result.details["loops_detected"] == 0

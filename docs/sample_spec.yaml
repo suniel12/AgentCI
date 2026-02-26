@@ -127,3 +127,43 @@ queries:
       max_tool_calls: 5
       min_sequence_similarity: 0.6  # Must be similar to golden baseline sequence
       match_mode: subset
+
+  # ── Composite rubric example — recommended pattern ─────────────────────────
+  # This is the preferred way to test answer quality. Multiple rubrics each
+  # target a different quality dimension, making failures actionable.
+  # Keyword checks (expected_in_answer) are brittle — they fail on paraphrases.
+  - query: "How do I configure the retry policy for my agent?"
+    description: "Composite rubric example — 3 stacked rubrics for full coverage"
+    tags: [happy-path, in-scope, composite-rubric-example]
+
+    correctness:
+      # NOTE: Avoid expected_in_answer for content that could be paraphrased.
+      # Use llm_judge rubrics instead — they survive model updates and rephrasing.
+      llm_judge:
+        # Rubric 1: Does the answer address the question at all?
+        - rule: >
+            The response directly addresses retry policy configuration and does
+            not deflect or say it cannot help.
+          threshold: 0.7
+
+        # Rubric 2: Is the answer actionable?
+        - rule: >
+            The response provides specific, executable configuration steps or
+            code snippets the user can copy and use immediately.
+          threshold: 0.6
+          scale:
+            - "1: No concrete steps — vague or generic advice only"
+            - "3: Some steps but missing key details (e.g., parameter names)"
+            - "5: Complete, copy-paste-ready configuration with all parameters"
+
+        # Rubric 3: Is the answer grounded? No hallucinated API names.
+        - rule: >
+            All configuration parameters, function names, and API references in
+            the response match the documentation. No fabricated options.
+          threshold: 0.8
+
+    path:
+      expected_tools: [retriever_tool]
+      min_tool_recall: 1.0   # Retriever must be called — catches routing failures
+      max_tool_calls: 5
+      match_mode: subset

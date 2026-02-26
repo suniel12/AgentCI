@@ -17,6 +17,7 @@ from agentci.engine.correctness import evaluate_correctness
 from agentci.engine.cost import evaluate_cost
 from agentci.engine.path import evaluate_path
 from agentci.engine.results import LayerResult, LayerStatus, QueryResult
+from agentci.engine.span_assertions import evaluate_span_assertions
 from agentci.schema.spec_models import AgentCISpec, GoldenQuery
 
 if TYPE_CHECKING:
@@ -28,6 +29,7 @@ def evaluate_query(
     trace: "Trace",
     baseline_trace: Optional["Trace"] = None,
     judge_config: Optional[dict[str, Any]] = None,
+    spec_dir: Optional[str] = None,
 ) -> QueryResult:
     """Evaluate a single golden query across all three evaluation layers.
 
@@ -36,6 +38,7 @@ def evaluate_query(
         trace:          The agent's execution trace for this query.
         baseline_trace: Optional golden baseline trace for comparison.
         judge_config:   Global LLM judge settings (model, temperature, ensemble).
+        spec_dir:       Directory of the spec file (for context_file resolution).
 
     Returns:
         QueryResult containing one LayerResult per layer.
@@ -56,6 +59,33 @@ def evaluate_query(
             details={},
             messages=["No correctness spec defined"],
         )
+
+    # ── Span Assertions (sub-layer of Correctness, hard fail) ─────────────────
+    if query.span_assertions:
+        span_result = evaluate_span_assertions(
+            spec=query.span_assertions,
+            trace=trace,
+            judge_config=judge_config,
+            spec_dir=spec_dir,
+        )
+        # Merge span assertion results into correctness details
+        correctness.details["span_assertions"] = span_result.details.get(
+            "span_assertions", []
+        )
+        # If span assertions failed but correctness passed, escalate to FAIL
+        if span_result.status == LayerStatus.FAIL and correctness.status != LayerStatus.FAIL:
+            correctness = LayerResult(
+                status=LayerStatus.FAIL,
+                details=correctness.details,
+                messages=correctness.messages + span_result.messages,
+            )
+        elif span_result.status == LayerStatus.FAIL:
+            # Both failed — append span assertion failures to existing messages
+            correctness = LayerResult(
+                status=LayerStatus.FAIL,
+                details=correctness.details,
+                messages=correctness.messages + span_result.messages,
+            )
 
     # ── Layer 2: Path (soft warn) ─────────────────────────────────────────────
     if query.path:
@@ -97,6 +127,7 @@ def evaluate_spec(
     spec: AgentCISpec,
     traces: dict[str, "Trace"],
     baselines: Optional[dict[str, "Trace"]] = None,
+    spec_dir: Optional[str] = None,
 ) -> list[QueryResult]:
     """Evaluate all queries in a spec against their captured traces.
 
@@ -122,6 +153,7 @@ def evaluate_spec(
             trace=trace,
             baseline_trace=baseline,
             judge_config=spec.judge_config,
+            spec_dir=spec_dir,
         )
         results.append(result)
 

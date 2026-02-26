@@ -70,12 +70,15 @@ class LangGraphAdapter(BaseAdapter):
             # Check for tool calls (AIMessage)
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
+                    tool_args = tc.get("args", {})
                     tool_call = ToolCall(
                         tool_name=tc.get("name", ""),
-                        arguments=tc.get("args", {}),
+                        arguments=tool_args,
                         success=True
                     )
-                    
+                    # Propagate tool args into span attributes for span assertions
+                    current_span.attributes[f"tool.args.{tc.get('name', 'unknown')}"] = tool_args
+
                     # We try to pair it with the subsequent ToolMessage
                     # In a real parser we'd look ahead or map by tool_call_id
                     current_span.tool_calls.append(tool_call)

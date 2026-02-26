@@ -1,5 +1,5 @@
 """
-AgentCI v2 Spec Models
+AgentCI v2/v3 Spec Models
 
 Pydantic models for agentci_spec.yaml. Every field is optional except
 `agent` and `queries` on the root spec, and `query` on each golden query.
@@ -8,6 +8,7 @@ Hierarchy:
     AgentCISpec
     └── GoldenQuery (1..N)
         ├── CorrectnessSpec  (Layer 1 — hard fail)
+        │   └── span_assertions  (sub-layer of Correctness, hard fail)
         ├── PathSpec         (Layer 2 — soft warn)
         └── CostSpec         (Layer 3 — soft warn)
 """
@@ -31,6 +32,81 @@ class MatchMode(str, Enum):
     SUPERSET = "superset"    # All used tools must be in reference set
 
 
+class SpanKindSelector(str, Enum):
+    """Which type of span to target in span assertions."""
+    TOOL = "TOOL"
+    NODE = "NODE"
+    HANDOFF = "HANDOFF"
+    GUARDRAIL = "GUARDRAIL"
+    LLM = "LLM"
+
+
+class SpanAssertType(str, Enum):
+    """The type of assertion to perform on a span field."""
+    LLM_JUDGE = "llm_judge"
+    CONTAINS = "contains"
+    NOT_CONTAINS = "not_contains"
+    REGEX = "regex"
+    EQUALS = "equals"
+
+
+# ── Span Assertion Models ──────────────────────────────────────────────────────
+
+
+class SpanSelector(BaseModel):
+    """Selects a span from the trace by kind and name."""
+    kind: SpanKindSelector = Field(
+        ...,
+        description="Type of span to target (TOOL, NODE, HANDOFF, GUARDRAIL, LLM)",
+    )
+    name: str = Field(
+        ...,
+        description="Name of the tool, node, or agent to match",
+    )
+
+
+class SpanAssert(BaseModel):
+    """A single assertion on a field within a matched span."""
+    type: SpanAssertType = Field(
+        ...,
+        description="Assertion type: contains, not_contains, regex, equals, or llm_judge",
+    )
+    field: str = Field(
+        ...,
+        description=(
+            "Dotted path to the span field to extract, "
+            "e.g. 'attributes.tool.args.query' or 'output_data'"
+        ),
+    )
+    rule: Optional[str] = Field(
+        None,
+        description="Natural language rule for llm_judge assertions",
+    )
+    value: Optional[str] = Field(
+        None,
+        description="Expected value for contains, not_contains, regex, or equals assertions",
+    )
+    threshold: float = Field(
+        0.8,
+        ge=0.0,
+        le=1.0,
+        description="Minimum passing score for llm_judge assertions (normalised 0–1)",
+    )
+
+
+class SpanAssertionSpec(BaseModel):
+    """Span-level assertion: select one or more spans and assert on their fields."""
+    selector: SpanSelector = Field(
+        ...,
+        description="Selects which span(s) to assert against",
+    )
+    asserts: list[SpanAssert] = Field(
+        ...,
+        min_length=1,
+        description="One or more assertions to run against each matched span",
+    )
+
+
 # ── Sub-models ─────────────────────────────────────────────────────────────────
 
 
@@ -52,6 +128,15 @@ class JudgeRubric(BaseModel):
     few_shot_examples: Optional[list[dict[str, Any]]] = Field(
         None,
         description="Example input/output/score triples for calibration",
+    )
+    context_file: Optional[str] = Field(
+        None,
+        description=(
+            "Path to a reference document used as ground truth for this rubric. "
+            "The judge is instructed to evaluate the answer ONLY against this file's "
+            "contents, ignoring prior training knowledge. "
+            "Path is resolved relative to the spec file location."
+        ),
     )
 
 
@@ -92,6 +177,14 @@ class CorrectnessSpec(BaseModel):
         None,
         description="Hallucination / grounding evaluation rubric",
     )
+    refutes_premise: bool = Field(
+        False,
+        description=(
+            "When True, the agent is expected to correct a false premise in the query. "
+            "Skips expected_in_answer/not_in_answer checks (they don't apply to refutals) "
+            "and injects a built-in 'false premise correction' rubric into llm_judge."
+        ),
+    )
 
 
 class PathSpec(BaseModel):
@@ -109,10 +202,10 @@ class PathSpec(BaseModel):
         None,
         description="Tools that must NOT be called (safety boundary — hard fail if violated)",
     )
-    max_loops: Optional[int] = Field(
-        None,
+    max_loops: int = Field(
+        3,
         ge=1,
-        description="Maximum consecutive repeated tool invocations (loop detection)",
+        description="Maximum consecutive repeated tool invocations (loop detection). Default 3.",
     )
     match_mode: MatchMode = Field(
         MatchMode.SUBSET,
@@ -197,6 +290,14 @@ class GoldenQuery(BaseModel):
     correctness: Optional[CorrectnessSpec] = None
     path: Optional[PathSpec] = None
     cost: Optional[CostSpec] = None
+    span_assertions: list[SpanAssertionSpec] = Field(
+        default_factory=list,
+        description=(
+            "Span-level assertions evaluated against trace data. "
+            "Hard-fails on any assertion failure (like Correctness layer). "
+            "Use to assert on data flowing between nodes/tools."
+        ),
+    )
 
     @field_validator("query")
     @classmethod
