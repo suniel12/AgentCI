@@ -24,15 +24,32 @@ _active_span: contextvars.ContextVar[Span | None] = contextvars.ContextVar(
 
 
 class TraceContext:
+    """Context manager that captures all LLM/tool activity into a Trace.
+
+    Automatically monkey-patches OpenAI and Anthropic client .create() methods
+    to record every LLM call and tool invocation. No agent code changes needed.
+
+    Args:
+        agent_name: Name of the agent being traced (for identification).
+        test_name: Name of the test case (for labeling).
+
+    Attributes:
+        trace: The Trace object containing all captured activity.
+
+    Example:
+        >>> from agentci.capture import TraceContext
+        >>> with TraceContext(agent_name="booking_agent", test_name="test_booking") as ctx:
+        ...     result = my_agent.run("Book a flight to NYC")
+        ...     trace = ctx.trace
+        >>> print(trace.tool_call_sequence)
+        ['search_flights', 'book_flight']
+
+    For LangGraph agents, call attach_langgraph_state() after graph.invoke():
+        >>> with TraceContext(agent_name="rag_agent") as ctx:
+        ...     result = graph.invoke({"messages": [("user", query)]})
+        ...     ctx.attach_langgraph_state(result)
     """
-    Context manager that captures all LLM/tool activity into a Trace.
-    
-    Usage:
-        with TraceContext(agent_name="booking_agent") as ctx:
-            result = my_agent.run("Book a flight to NYC")
-            trace = ctx.trace
-    """
-    
+
     def __init__(self, agent_name: str = "", test_name: str = ""):
         self.trace = Trace(agent_name=agent_name, test_name=test_name)
         self._patches = []
@@ -173,9 +190,19 @@ class TraceContext:
             pass
             
     def attach_langgraph_state(self, state: dict) -> None:
-        """
-        Explicitly parse a LangGraph MessagesState object to natively extract 
-        tools, node executions, and message details without relying on monkey-patches.
+        """Parse a LangGraph MessagesState to extract tools and node executions.
+
+        Call this after graph.invoke() to populate the trace with tool calls
+        and node executions extracted from the LangGraph state.
+
+        Args:
+            state: The LangGraph state dict (must contain a "messages" key).
+
+        Example:
+            >>> with TraceContext(agent_name="rag_agent") as ctx:
+            ...     result = graph.invoke({"messages": [("user", "What is RAG?")]})
+            ...     ctx.attach_langgraph_state(result)
+            ...     trace = ctx.trace
         """
         import json
         

@@ -165,7 +165,12 @@ class Trace(BaseModel):
 
     @property
     def tool_call_sequence(self) -> list[str]:
-        """Ordered list of tool names called across all spans."""
+        """Ordered list of tool names called across all spans.
+
+        Example:
+            >>> trace.tool_call_sequence
+            ['search_flights', 'book_flight']
+        """
         calls = []
         for span in self.spans:
             calls.extend(tc.tool_name for tc in span.tool_calls)
@@ -173,19 +178,39 @@ class Trace(BaseModel):
     
     @property
     def tool_call_details(self) -> list[ToolCall]:
-        """All tool calls across all spans, in order."""
+        """All ToolCall objects across all spans, in order.
+
+        Each ToolCall has: tool_name, arguments, result, error, duration_ms.
+
+        Example:
+            >>> for tc in trace.tool_call_details:
+            ...     print(f"{tc.tool_name}({tc.arguments})")
+        """
         calls = []
         for span in self.spans:
             calls.extend(span.tool_calls)
         return calls
 
     def get_handoffs(self) -> list[Span]:
-        """Return all HANDOFF spans in order."""
+        """Return all HANDOFF spans in order.
+
+        Each handoff span has from_agent and to_agent fields.
+
+        Example:
+            >>> handoffs = trace.get_handoffs()
+            >>> handoffs[-1].to_agent
+            'Billing Agent'
+        """
         return [s for s in self.spans if s.kind == SpanKind.HANDOFF]
 
     @property
     def guardrails_triggered(self) -> list[str]:
-        """Names of guardrails that fired."""
+        """Names of guardrails that fired during the agent run.
+
+        Example:
+            >>> trace.guardrails_triggered
+            ['pii_detector', 'profanity_filter']
+        """
         return [
             s.guardrail_name for s in self.spans
             if s.kind == SpanKind.GUARDRAIL and s.guardrail_triggered
@@ -194,12 +219,25 @@ class Trace(BaseModel):
 
     @property
     def agents_involved(self) -> list[str]:
-        """Ordered list of agent names that executed."""
+        """Ordered list of agent names that executed.
+
+        Example:
+            >>> trace.agents_involved
+            ['Triage Agent', 'Billing Agent']
+        """
         return [s.name for s in self.spans if s.kind == SpanKind.AGENT]
 
     @property
     def available_handoffs(self) -> list[list[str]]:
-        """Available handoff targets from each AGENT span's metadata."""
+        """Available handoff targets from each AGENT span's metadata.
+
+        Returns a list of lists, one per AGENT span, containing the agent
+        names that span could hand off to (from span.metadata["handoffs"]).
+
+        Example:
+            >>> trace.available_handoffs
+            [['Billing Agent', 'Technical Agent', 'Account Agent']]
+        """
         return [
             s.metadata.get("handoffs", [])
             for s in self.spans if s.kind == SpanKind.AGENT

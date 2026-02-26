@@ -1,0 +1,21 @@
+# AgentCI
+> Trace-based regression testing for AI agents. Catch semantic drift, tool call changes, and cost spikes before production.
+
+## Docs
+- [README](https://github.com/agentci-org/agentci/blob/main/README.md): Overview, quickstart, and core concepts
+- [AGENTS.md](https://github.com/agentci-org/agentci/blob/main/AGENTS.md): Machine-readable API reference for coding agents
+- [DemoAgents](https://github.com/agentci-org/DemoAgents): Three working demo agents with full test suites
+- [Quickstart](https://github.com/agentci-org/agentci/blob/main/docs/quickstart.md): Getting started guide
+- [Writing Tests](https://github.com/agentci-org/agentci/blob/main/docs/writing-tests.md): How to write AgentCI tests
+- [Golden Traces](https://github.com/agentci-org/agentci/blob/main/docs/golden-traces.md): Golden baseline workflow
+- [Cost Tracking](https://github.com/agentci-org/agentci/blob/main/docs/cost-tracking.md): Cost monitoring and budgets
+- [CI/CD](https://github.com/agentci-org/agentci/blob/main/docs/ci-cd.md): GitHub Actions integration
+
+## API Reference
+- [Models](https://github.com/agentci-org/agentci/blob/main/src/agentci/models.py): Trace, Span, LLMCall, ToolCall, SpanKind, DiffType, TestCase, TestSuite
+- [Assertions](https://github.com/agentci-org/agentci/blob/main/src/agentci/assertions.py): evaluate_assertion, assert_golden_match, assert_budget, truncate_tokens
+- [Mocks](https://github.com/agentci-org/agentci/blob/main/src/agentci/mocks.py): MockTool, MockToolkit, AnthropicMocker, OpenAIMocker
+- [Capture](https://github.com/agentci-org/agentci/blob/main/src/agentci/capture.py): TraceContext context manager
+- [Diff Engine](https://github.com/agentci-org/agentci/blob/main/src/agentci/diff_engine.py): diff_traces, DiffReport, load_baseline
+- [CLI](https://github.com/agentci-org/agentci/blob/main/src/agentci/cli.py): init, run, record, diff, report commands
+- [Exceptions](https://github.com/agentci-org/agentci/blob/main/src/agentci/exceptions.py): AgentCIError, TraceError, ConfigError, MockError, BaselineError

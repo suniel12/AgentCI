@@ -14,7 +14,18 @@ import os
 import json
 
 class DiffReport:
-    """Wrapper around diff results for easy assertions."""
+    """Wrapper around diff results for easy assertions.
+
+    Attributes:
+        diffs: List of DiffResult objects.
+        has_regression: True if any diff has error severity.
+        summary: Human-readable summary string.
+
+    Example:
+        >>> from agentci import diff, load_baseline
+        >>> report = diff(golden_trace, current_trace)
+        >>> assert not report.has_regression, report.summary
+    """
     def __init__(self, diffs: list[DiffResult]):
         self.diffs = diffs
         # Any error-severity diff is considered a regression
@@ -22,19 +33,46 @@ class DiffReport:
         self.summary = ", ".join([d.message for d in diffs]) if diffs else "No regressions"
 
 def diff(golden: Trace, current: Trace) -> DiffReport:
-    """Compare traces and return a report object for assertions."""
+    """Compare a golden trace against a current trace and return a DiffReport.
+
+    Args:
+        golden: The known-good baseline trace.
+        current: The trace from the current test run.
+
+    Returns:
+        A DiffReport with has_regression and summary attributes.
+
+    Example:
+        >>> from agentci import diff
+        >>> report = diff(golden_trace, current_trace)
+        >>> assert not report.has_regression, report.summary
+    """
     from .diff_engine import diff_traces
     return DiffReport(diff_traces(current, golden))
 
 def load_baseline(name: str) -> dict[str, Trace]:
-    """
-    Load a saved baseline (a collection of traces).
-    For now, we expect them to be saved in golden/{name}.json
-    Returns a dict mapping test_name (or query) -> Trace object.
+    """Load a saved baseline collection of traces from golden/{name}.json.
+
+    Args:
+        name: The baseline name (without path prefix or extension).
+
+    Returns:
+        A dict mapping test_name -> Trace object.
+
+    Raises:
+        FileNotFoundError: If golden/{name}.json doesn't exist.
+
+    Example:
+        >>> from agentci import load_baseline
+        >>> baselines = load_baseline("v1-baseline")
+        >>> golden_trace = baselines["test_billing_routing"]
     """
     path = f"golden/{name}.json"
     if not os.path.exists(path):
-        raise FileNotFoundError(f"Baseline {path} not found")
+        raise FileNotFoundError(
+            f"Baseline '{path}' not found.\n"
+            f"  Fix: Run 'agentci record <test_name> -o {path}' to create a baseline."
+        )
         
     with open(path, "r") as f:
         data = json.load(f)
@@ -47,9 +85,24 @@ def load_baseline(name: str) -> dict[str, Trace]:
 
 
 def diff_traces(current: Trace, golden: Trace) -> list[DiffResult]:
-    """
-    Compare current trace against golden trace.
-    Returns a list of specific, actionable differences.
+    """Compare current trace against golden trace and return categorized diffs.
+
+    Detects 11 categories of regression: TOOLS_CHANGED, ARGS_CHANGED,
+    SEQUENCE_CHANGED, COST_SPIKE, STEPS_CHANGED, STOP_REASON_CHANGED,
+    ROUTING_CHANGED, GUARDRAILS_CHANGED, AVAILABLE_HANDOFFS_CHANGED, etc.
+
+    Args:
+        current: The trace from the current test run.
+        golden: The known-good baseline trace.
+
+    Returns:
+        A list of DiffResult objects, each with diff_type, severity, and message.
+
+    Example:
+        >>> from agentci.diff_engine import diff_traces
+        >>> diffs = diff_traces(current_trace, golden_trace)
+        >>> errors = [d for d in diffs if d.severity == "error"]
+        >>> assert not errors, [d.message for d in errors]
     """
     diffs: list[DiffResult] = []
     

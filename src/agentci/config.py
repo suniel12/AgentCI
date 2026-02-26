@@ -11,7 +11,25 @@ import os
 from .models import TestSuite
 
 def load_config(path: str = "agentci.yaml") -> TestSuite:
-    """Load and validate agentci.yaml configuration file."""
+    """Load and validate agentci.yaml configuration file.
+
+    Args:
+        path: Path to the YAML config file (default: agentci.yaml).
+
+    Returns:
+        A validated TestSuite object.
+
+    Raises:
+        ConfigError: If the config file is missing or invalid.
+    """
+    if not os.path.exists(path):
+        from .exceptions import ConfigError
+        raise ConfigError(
+            f"Configuration file not found: {path}",
+            fix=f"Run 'agentci init' to generate a default agentci.yaml, "
+                f"or create one manually. See AGENTS.md for the expected format."
+        )
+
     with open(path, 'r') as f:
         config_dict = yaml.safe_load(f)
     
