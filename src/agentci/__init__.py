@@ -10,7 +10,8 @@ v2 exports (new declarative evaluation engine):
     AgentCISpec, GoldenQuery, load_spec
     evaluate_query, evaluate_spec
     QueryResult, LayerResult, LayerStatus
-    save_baseline (v2)
+    save_baseline (v2), load_versioned_baseline, list_baselines
+    diff_baselines, DiffReport (v2 three-tier diff)
 """
 
 try:
@@ -50,6 +51,8 @@ __all__ = [
     "save_baseline",
     "load_versioned_baseline",
     "list_baselines",
+    "diff_baselines",
+    "DiffReport",
 ]
 
 
@@ -61,4 +64,7 @@ def __getattr__(name: str):
     if name == "evaluate_spec":
         from .engine.runner import evaluate_spec
         return evaluate_spec
+    if name in ("diff_baselines", "DiffReport", "MetricDelta"):
+        from .engine.diff import diff_baselines, DiffReport, MetricDelta  # noqa: F401
+        return locals()[name]
     raise AttributeError(f"module 'agentci' has no attribute {name!r}")

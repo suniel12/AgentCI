@@ -348,12 +348,127 @@ def record(test_name, suite, output, output_json):
             console.print(f"[bold red]Error:[/] {e}")
 
 
-@cli.command()
-@click.argument('test_name')
-@click.option('--suite', '-s', default='agentci.yaml')
-def diff(test_name, suite):
-    """Show diff between latest run and golden trace (v1 — deprecated)."""
-    pass
+@cli.command(name="diff")
+@click.option('--baseline', '-b', required=True, help="Baseline version tag (e.g. 'v1-broken')")
+@click.option('--compare', '-c', required=True, help="Compare version tag (e.g. 'v2-fixed')")
+@click.option('--agent', '-a', required=True, help="Agent identifier (matches baseline file naming)")
+@click.option('--config', 'spec_path', default=None, type=click.Path(exists=True),
+              help='Path to agentci_spec.yaml for correctness evaluation (optional)')
+@click.option('--baseline-dir', default='./baselines', show_default=True,
+              help='Directory containing versioned baseline JSON files')
+@click.option('--format', 'fmt', type=click.Choice(['console', 'github', 'json']),
+              default='console', show_default=True, help='Output format')
+@click.option('--query', 'query_filter', default=None,
+              help='Only compare baselines for this specific query (partial match)')
+def diff_cmd(baseline, compare, agent, spec_path, baseline_dir, fmt, query_filter):
+    """Compare two versioned baselines with three-tier (Correctness/Path/Cost) analysis.
+
+    Loads the AGENT.BASELINE.json and AGENT.COMPARE.json files from BASELINE_DIR
+    and renders a structured diff report.
+
+    Example:
+        agentci diff --baseline v1-broken --compare v2-fixed --agent rag-agent
+
+    Exit codes:
+        0  No regressions detected
+        1  Correctness regression (pass → fail)
+        2  Error loading baselines
+    """
+    import json as json_mod
+    from pathlib import Path
+    from .engine.diff import diff_baselines
+
+    baseline_dir_path = Path(baseline_dir)
+
+    # Collect matching baseline files
+    baseline_pattern = f"{agent}.{baseline}.json"
+    compare_pattern = f"{agent}.{compare}.json"
+
+    baseline_file = baseline_dir_path / baseline_pattern
+    compare_file = baseline_dir_path / compare_pattern
+
+    if not baseline_file.exists():
+        # Try glob — maybe multiple queries are stored as separate files
+        baseline_files = sorted(baseline_dir_path.glob(f"{agent}.{baseline}.*.json"))
+        compare_files = sorted(baseline_dir_path.glob(f"{agent}.{compare}.*.json"))
+    else:
+        baseline_files = [baseline_file]
+        compare_files = [compare_file]
+
+    if not baseline_files:
+        console.print(f"[red]Error:[/] No baseline files found for '{agent}.{baseline}' in {baseline_dir}")
+        console.print(f"[dim]Looked for: {baseline_dir_path / baseline_pattern}[/]")
+        sys.exit(2)
+
+    if not compare_files:
+        console.print(f"[red]Error:[/] No compare files found for '{agent}.{compare}' in {baseline_dir}")
+        sys.exit(2)
+
+    # Pair up files by query index
+    pairs = list(zip(baseline_files, compare_files))
+
+    # Apply query filter
+    if query_filter:
+        pairs = [(b, c) for b, c in pairs if query_filter.lower() in b.stem.lower()]
+
+    # Load optional spec
+    spec = None
+    if spec_path:
+        from .loader import load_spec
+        try:
+            spec = load_spec(spec_path)
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/] Could not load spec ({e}) — correctness comparison disabled")
+
+    # Run diff for each pair
+    reports = []
+    for b_file, c_file in pairs:
+        try:
+            with open(b_file) as f:
+                b_data = json_mod.load(f)
+            with open(c_file) as f:
+                c_data = json_mod.load(f)
+        except Exception as e:
+            console.print(f"[red]Error loading baselines:[/] {e}")
+            sys.exit(2)
+
+        report = diff_baselines(b_data, c_data, spec=spec)
+        reports.append(report)
+
+    if not reports:
+        console.print("[yellow]No matching baseline pairs found.[/]")
+        sys.exit(0)
+
+    # Render output
+    any_regression = False
+    for report in reports:
+        if report.has_regression:
+            any_regression = True
+
+        if fmt == "console":
+            console.print(report.summary_console())
+            if len(pairs) > 1:
+                console.print()  # blank line between multiple reports
+
+        elif fmt == "json":
+            import json as json_mod
+            click.echo(json_mod.dumps(report.summary_json(), indent=2))
+
+        elif fmt == "github":
+            j = report.summary_json()
+            prefix = "error" if report.has_regression else "notice"
+            title = f"AgentCI Diff: {report.agent} ({report.from_version} → {report.to_version})"
+            body_parts = []
+            for p in j.get("path", []):
+                pct = f" ({p['pct_change']:+.1f}%)" if p.get("pct_change") is not None else ""
+                body_parts.append(f"{p['metric']}: {p['before']} → {p['after']}{pct}")
+            for c in j.get("cost", []):
+                pct = f" ({c['pct_change']:+.1f}%)" if c.get("pct_change") is not None else ""
+                body_parts.append(f"{c['metric']}: {c['before']} → {c['after']}{pct}")
+            body = " | ".join(body_parts) if body_parts else "No metric changes"
+            click.echo(f"::{prefix} title={title}::{body}")
+
+    sys.exit(1 if any_regression else 0)
 
 
 @cli.command()
