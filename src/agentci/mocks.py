@@ -105,8 +105,20 @@ class MockToolkit:
         return toolkit
     
     def get(self, name: str) -> MockTool:
+        """Get a mock tool by name.
+
+        Args:
+            name: The tool name to look up.
+
+        Raises:
+            KeyError: If the tool is not found, with a list of available tools.
+        """
         if name not in self.tools:
-            raise KeyError(f"Mock tool '{name}' not found. Available: {list(self.tools)}")
+            available = sorted(self.tools.keys())
+            raise KeyError(
+                f"Mock tool '{name}' not found. Available tools: {available}. "
+                f"Fix: Add '{name}' to your mocks YAML file or use one of the available tools."
+            )
         return self.tools[name]
     
     def set_all_scenarios(self, scenario: str) -> None:

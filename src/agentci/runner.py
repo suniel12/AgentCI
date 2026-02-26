@@ -25,15 +25,25 @@ class TestRunner:
             return self._agent_fn
             
         if not self.suite.agent:
-            raise ValueError("No agent import path provided in test suite.")
-            
+            from .exceptions import ConfigError
+            raise ConfigError(
+                "No agent import path provided in test suite.",
+                fix="Set 'agent: myapp.agent:run_agent' in your agentci.yaml file."
+            )
+
         try:
             module_path, fn_name = self.suite.agent.split(":")
             module = importlib.import_module(module_path)
             self._agent_fn = getattr(module, fn_name)
             return self._agent_fn
         except (ImportError, AttributeError, ValueError) as e:
-            raise ImportError(f"Could not import agent function '{self.suite.agent}': {e}")
+            from .exceptions import ImportError_
+            raise ImportError_(
+                f"Could not import agent function '{self.suite.agent}': {e}",
+                fix=f"Ensure the import path follows 'module.path:function_name' format. "
+                    f"Example: 'myapp.agent:run_agent'. Check that the module is installed "
+                    f"and the function exists."
+            )
 
     def run_suite(self, runs: int = 1) -> SuiteResult:
         """Execute all tests in the suite."""
@@ -47,9 +57,20 @@ class TestRunner:
             # ideally config loading resolves absolute paths, but here we assume CWD or absolute
             try:
                 mock_toolkit = MockToolkit.from_yaml(self.suite.mocks)
+            except FileNotFoundError:
+                from .exceptions import MockError
+                raise MockError(
+                    f"Mock file not found: {self.suite.mocks}",
+                    fix=f"Create the mock file at '{self.suite.mocks}' or remove the 'mocks' "
+                        f"key from agentci.yaml. To record mocks from a live run: "
+                        f"'agentci record <test_name>'"
+                )
             except Exception as e:
-                # TODO: Bubble up error properly
-                print(f"Warning: Failed to load mocks from {self.suite.mocks}: {e}")
+                from .exceptions import MockError
+                raise MockError(
+                    f"Failed to load mocks from {self.suite.mocks}: {e}",
+                    fix="Check that the YAML file is valid and follows the expected format."
+                )
 
         suite_result = SuiteResult(suite_name=self.suite.name)
         start_time = time.perf_counter()
@@ -142,8 +163,9 @@ class TestRunner:
                             diffs = diff_traces(ctx.trace, golden)
                     except FileNotFoundError:
                         assertion_results.append({
-                            "passed": True, 
-                            "message": f"⚠ Golden trace not found: {test.golden_trace}"
+                            "passed": True,
+                            "message": f"⚠ Golden trace not found: {test.golden_trace}. "
+                                       f"Fix: Run 'agentci record {test.name} -o {test.golden_trace}' to create a baseline."
                         })
                     except Exception as e:
                         assertion_results.append({
