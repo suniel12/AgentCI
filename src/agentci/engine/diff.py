@@ -422,14 +422,24 @@ def _generate_legacy_diffs(baseline: "Trace", compare: "Trace") -> list[Any]:
 
 
 def _extract_answer(trace: "Trace") -> str:
-    """Extract final text answer from the last span's output."""
-    if not trace.spans:
-        return ""
-    last = trace.spans[-1]
-    out = last.output_data
-    if out is None:
-        return ""
-    return out if isinstance(out, str) else str(out)
+    """Extract the agent's final text answer from the trace.
+
+    Strategy:
+        1. trace.metadata["final_output"] (explicitly set by runner).
+        2. Last span's output_data (fallback for runners that don't set metadata).
+        3. Empty string if nothing found.
+    """
+    meta_output = trace.metadata.get("final_output")
+    if meta_output is not None:
+        return str(meta_output)
+
+    if trace.spans:
+        last = trace.spans[-1]
+        out = last.output_data
+        if out is not None:
+            return out if isinstance(out, str) else str(out)
+
+    return ""
 
 
 def _format_value(before: Any, after: Any, label: str) -> str:

@@ -52,6 +52,8 @@ def evaluate_query(
             spec=query.correctness,
             trace=trace,
             judge_config=judge_config,
+            query=query.query,
+            spec_dir=spec_dir,
         )
     else:
         correctness = LayerResult(
@@ -120,6 +122,7 @@ def evaluate_query(
         correctness=correctness,
         path=path,
         cost=cost,
+        trace=trace,
     )
 
 
@@ -167,16 +170,18 @@ def _extract_answer(trace: "Trace") -> str:
     """Extract the agent's final text answer from the trace.
 
     Strategy:
-        1. Last span's output_data if it's a string.
-        2. str(output_data) for non-string types.
-        3. Empty string if no spans.
+        1. trace.metadata["final_output"] (explicitly set by runner).
+        2. Last span's output_data (fallback for runners that don't set metadata).
+        3. Empty string if nothing found.
     """
-    if not trace.spans:
-        return ""
-    last_span = trace.spans[-1]
-    output = last_span.output_data
-    if output is None:
-        return ""
-    if isinstance(output, str):
-        return output
-    return str(output)
+    meta_output = trace.metadata.get("final_output")
+    if meta_output is not None:
+        return str(meta_output)
+
+    if trace.spans:
+        last_span = trace.spans[-1]
+        output = last_span.output_data
+        if output is not None:
+            return output if isinstance(output, str) else str(output)
+
+    return ""

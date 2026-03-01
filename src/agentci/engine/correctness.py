@@ -47,6 +47,8 @@ def evaluate_correctness(
     spec: CorrectnessSpec,
     trace: Optional[Any] = None,
     judge_config: Optional[dict[str, Any]] = None,
+    query: Optional[str] = None,
+    spec_dir: Optional[str] = None,
 ) -> LayerResult:
     """Evaluate correctness assertions against an agent answer.
 
@@ -55,6 +57,8 @@ def evaluate_correctness(
         spec:         CorrectnessSpec defining what to check.
         trace:        Optional raw trace object (used for context in judge calls).
         judge_config: Global judge settings (model, temperature, ensemble).
+        query:        Optional original user query for judge evaluation context.
+        spec_dir:     Directory of the spec file (for context_file resolution).
 
     Returns:
         LayerResult with PASS or FAIL status.
@@ -74,11 +78,12 @@ def evaluate_correctness(
             effective_judges.extend(spec.llm_judge)
 
         for rubric in effective_judges:
-            result = _run_judge_safe(answer, rubric, judge_config, trace)
+            result = _run_judge_safe(answer, rubric, judge_config, trace, query, spec_dir)
             key = f"judge_{rubric.rule[:40]}"
             details[key] = result
             if not result.get("passed", False):
-                failures.append(f"Judge failed: {rubric.rule[:80]}")
+                score = result.get("score", "?")
+                failures.append(f"Judge failed (score: {score}): {rubric.rule[:80]}")
             else:
                 score = result.get("score", "")
                 threshold = getattr(rubric, "threshold", "")
@@ -86,7 +91,7 @@ def evaluate_correctness(
                 pass_messages.append(f"Premise correction verified by judge{score_str}")
 
         if spec.safety_check and not failures:
-            result = _run_judge_safe(answer, spec.safety_check, judge_config, trace)
+            result = _run_judge_safe(answer, spec.safety_check, judge_config, trace, query, spec_dir)
             details["safety"] = result
             if not result.get("passed", False):
                 failures.append(f"Safety check failed: {spec.safety_check.rule}")
@@ -117,6 +122,21 @@ def evaluate_correctness(
         else:
             found_str = ", ".join(f'"{t}"' for t in spec.expected_in_answer)
             pass_messages.append(f"Found keywords: {found_str}")
+
+    # ── 1b. any_expected_in_answer (case-insensitive, OR logic) ─────────────
+    if spec.any_expected_in_answer:
+        found_any = [t for t in spec.any_expected_in_answer if t.lower() in answer.lower()]
+        details["any_expected_in_answer"] = {
+            "checked": spec.any_expected_in_answer,
+            "found": found_any,
+            "any_found": bool(found_any),
+        }
+        if not found_any:
+            terms_str = ", ".join(f'"{t}"' for t in spec.any_expected_in_answer)
+            failures.append(f"None of [{terms_str}] found in answer")
+        else:
+            found_str = ", ".join(f'"{t}"' for t in found_any)
+            pass_messages.append(f"Found keyword (any-of): {found_str}")
 
     # ── 2. not_in_answer (case-insensitive exclusion) ───────────────────────
     if spec.not_in_answer:
@@ -164,11 +184,20 @@ def evaluate_correctness(
     if not failures:
         if spec.llm_judge:
             for rubric in spec.llm_judge:
-                result = _run_judge_safe(answer, rubric, judge_config, trace)
+                result = _run_judge_safe(answer, rubric, judge_config, trace, query, spec_dir)
                 key = f"judge_{rubric.rule[:40]}"
                 details[key] = result
                 if not result.get("passed", False):
-                    failures.append(f"Judge failed: {rubric.rule}")
+                    # Check if there was an actual API/execution error
+                    if "error" in result:
+                        failures.append(f"Judge error: {result['error']}")
+                    else:
+                        score = result.get("score", "?")
+                        rationale = result.get("rationale", "")
+                        msg = f"Judge failed (score: {score}): {rubric.rule}"
+                        if rationale:
+                            msg += f"\n         Rationale: {rationale}"
+                        failures.append(msg)
                 else:
                     score = result.get("score", "")
                     threshold = getattr(rubric, "threshold", "")
@@ -176,7 +205,7 @@ def evaluate_correctness(
                     pass_messages.append(f"LLM judge passed{score_str}")
 
         if spec.safety_check and not failures:
-            result = _run_judge_safe(answer, spec.safety_check, judge_config, trace)
+            result = _run_judge_safe(answer, spec.safety_check, judge_config, trace, query, spec_dir)
             details["safety"] = result
             if not result.get("passed", False):
                 failures.append(f"Safety check failed: {spec.safety_check.rule}")
@@ -184,7 +213,7 @@ def evaluate_correctness(
                 pass_messages.append("Safety check passed")
 
         if spec.hallucination_check and not failures:
-            result = _run_judge_safe(answer, spec.hallucination_check, judge_config, trace)
+            result = _run_judge_safe(answer, spec.hallucination_check, judge_config, trace, query, spec_dir)
             details["hallucination"] = result
             if not result.get("passed", False):
                 failures.append("Hallucination check failed")
@@ -226,11 +255,13 @@ def _run_judge_safe(
     rubric: Any,
     judge_config: Optional[dict[str, Any]],
     trace: Any,
+    query: Optional[str] = None,
+    spec_dir: Optional[str] = None,
 ) -> dict[str, Any]:
     """Run a judge call, catching errors and returning a failure dict if needed."""
     from agentci.engine.judge import run_judge
     try:
-        return run_judge(answer=answer, rubric=rubric, config=judge_config)
+        return run_judge(answer=answer, rubric=rubric, config=judge_config, query=query, spec_dir=spec_dir)
     except Exception as e:
         return {
             "passed": False,

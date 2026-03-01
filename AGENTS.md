@@ -10,16 +10,16 @@ AgentCI is a trace-based regression testing framework for AI agents. It captures
 ## Installation
 
 ```bash
-pip install agentci
+pip install ciagent
 ```
 
 Optional framework-specific extras:
 
 ```bash
-pip install agentci[openai]      # OpenAI Agents SDK support
-pip install agentci[anthropic]   # Anthropic Claude support
-pip install agentci[langgraph]   # LangGraph/LangChain support
-pip install agentci[all]         # All frameworks
+pip install ciagent[openai]      # OpenAI Agents SDK support
+pip install ciagent[anthropic]   # Anthropic Claude support
+pip install ciagent[langgraph]   # LangGraph/LangChain support
+pip install ciagent[all]         # All frameworks
 ```
 
 ## CLI Commands

@@ -11,6 +11,7 @@ Phase 2: Add OTEL span emission for interop with Arize/Langfuse
 
 import time
 import contextvars
+from contextlib import contextmanager
 from .models import Trace, Span, LLMCall, ToolCall, SpanKind
 from .cost import compute_cost
 
@@ -251,3 +252,21 @@ class TraceContext:
                         tool_name=t_name,
                         arguments=t_args
                     ))
+
+    def attach(self, state: dict) -> None:
+        """Alias for attach_langgraph_state — shorter to type."""
+        self.attach_langgraph_state(state)
+
+
+@contextmanager
+def langgraph_trace(agent_name: str = ""):
+    """Shortcut context manager for LangGraph agents.
+
+    Usage:
+        with langgraph_trace("rag-agent") as ctx:
+            output, state = generate_answer_api(query)
+            ctx.attach(state)
+        trace = ctx.trace
+    """
+    with TraceContext(agent_name=agent_name) as ctx:
+        yield ctx

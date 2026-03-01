@@ -28,7 +28,7 @@ jobs:
           pip install .
           {% endif %}
           # Ensure AgentCI is installed for tests
-          pip install agentci
+          pip install ciagent
 
       - name: Run deterministic AgentCI tests
         # These always run — they use mocked tools and a mocked LLM client
@@ -68,7 +68,7 @@ jobs:
           {% elif dependency_file == 'pyproject.toml' %}
           pip install .
           {% endif %}
-          pip install agentci
+          pip install ciagent
 
       - name: Run LLM-as-judge tests
         # Only runs when the secret is available (will skip in external PRs)
@@ -103,7 +103,7 @@ jobs:
           {% elif dependency_file == 'pyproject.toml' %}
           pip install .
           {% endif %}
-          pip install agentci
+          pip install ciagent
 
       - name: Validate spec
         run: agentci validate agentci_spec.yaml

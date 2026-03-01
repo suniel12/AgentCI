@@ -25,7 +25,7 @@ from agentci.engine.results import LayerStatus, QueryResult
 
 # GitHub limits visible inline annotations per job; exceeding this silently
 # drops annotations. Warnings are budget-capped; errors are always emitted.
-MAX_INLINE_ANNOTATIONS = 10
+MAX_INLINE_ANNOTATIONS: int = 10
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ def _emit_github_annotations(results: list[QueryResult], spec_file: str) -> None
     Overflow warnings beyond the cap are written to GITHUB_STEP_SUMMARY so
     they remain accessible without silently disappearing.
     """
-    warning_count = 0
+    warning_count: int = 0
     overflow_warnings: list[str] = []
 
     for r in results:
@@ -149,6 +149,10 @@ def _emit_console(results: list[QueryResult]) -> None:
         _print_layer("PATH", r.path, fail_icon="⚠️", pass_icon="📈", warn_icon="⚠️")
         _print_layer("COST", r.cost, fail_icon="⚠️", pass_icon="💰", warn_icon="⚠️")
 
+        if r.hard_fail and getattr(r, "trace", None):
+            _print_answer_preview(r.trace)
+            _print_trace_summary(r.trace)
+
     total = len(results)
     passed = sum(1 for r in results if not r.hard_fail)
     warned = sum(1 for r in results if r.has_warnings and not r.hard_fail)
@@ -156,6 +160,60 @@ def _emit_console(results: list[QueryResult]) -> None:
     print(f"\n{'=' * 60}")
     print(f"Results: {passed}/{total} passed  |  {warned} warnings  |  {failed} failures")
 
+def _print_answer_preview(trace: Any) -> None:
+    """Show a truncated preview of the extracted answer for failed queries."""
+    answer = ""
+    meta_output = getattr(trace, "metadata", {}).get("final_output")
+    if meta_output is not None:
+        answer = str(meta_output)
+    elif getattr(trace, "spans", None):
+        last_span = trace.spans[-1]
+        output = getattr(last_span, "output_data", None)
+        if output is not None:
+            answer = str(output)
+
+    if not answer:
+        print("  [ANSWER] (empty — no answer extracted from trace)")
+        return
+
+    # Collapse whitespace for compact display
+    preview = " ".join(answer.split())
+    max_len = 300
+    if len(preview) > max_len:
+        preview = preview[:max_len] + "..."
+    print(f"  [ANSWER] {preview}")
+
+
+def _print_trace_summary(trace: Any) -> None:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.tree import Tree
+    from rich.text import Text
+
+    console = Console()
+    tree = Tree("[bold magenta]Trace Execution Summary[/]")
+    for span in trace.spans:
+        label = Text(f"{span.name} ", style="cyan bold")
+        if span.kind == "tool_call":
+            args = str(span.input_data)
+            if len(args) > 80:
+                args = args[:77] + "..."
+            label.append(f"({args})", style="dim")
+        else:
+            label.append(f"[{span.kind}]", style="magenta dim")
+
+        node = tree.add(label)
+        if span.stop_reason == "error":
+            node.add(Text(f"ERROR: {span.stop_reason}", style="bold red"))
+        elif span.output_data:
+            out = str(span.output_data)
+            # Remove newlines for compact display
+            out = " ".join(out.splitlines())
+            if len(out) > 120:
+                out = out[:117] + "..."
+            node.add(Text(out, style="green"))
+
+    console.print(Panel(tree, border_style="magenta", expand=False))
 
 def _print_layer(
     name: str,

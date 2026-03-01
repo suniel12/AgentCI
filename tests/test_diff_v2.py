@@ -384,3 +384,26 @@ class TestExtractAnswer:
         result = _extract_answer(t)
         assert isinstance(result, str)
         assert "key" in result
+
+    def test_metadata_fallback_when_output_none(self):
+        """When span.output_data is None, fall back to trace.metadata['final_output']."""
+        span = Span(name="agent", output_data=None)
+        t = Trace(spans=[span], metadata={"final_output": "The answer from metadata"})
+        assert _extract_answer(t) == "The answer from metadata"
+
+    def test_metadata_takes_priority_over_span(self):
+        """trace.metadata['final_output'] should be preferred over span output."""
+        span = Span(name="agent", output_data="From span")
+        t = Trace(spans=[span], metadata={"final_output": "From metadata"})
+        assert _extract_answer(t) == "From metadata"
+
+    def test_span_fallback_when_no_metadata(self):
+        """span.output_data should be used when metadata has no final_output."""
+        span = Span(name="agent", output_data="From span")
+        t = Trace(spans=[span], metadata={})
+        assert _extract_answer(t) == "From span"
+
+    def test_no_spans_with_metadata_fallback(self):
+        """Empty spans list should still check metadata."""
+        t = Trace(spans=[], metadata={"final_output": "Fallback answer"})
+        assert _extract_answer(t) == "Fallback answer"

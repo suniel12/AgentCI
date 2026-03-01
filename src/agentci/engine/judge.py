@@ -25,6 +25,37 @@ class JudgeError(Exception):
     """Raised when the judge cannot run due to a configuration error."""
 
 
+def _default_judge_model() -> str:
+    """Pick the best available judge model based on which API keys are set.
+
+    Prefers Anthropic (claude-sonnet-4-6) if ANTHROPIC_API_KEY is available,
+    falls back to OpenAI (gpt-4o) if only OPENAI_API_KEY is set.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "claude-sonnet-4-6"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "gpt-4o"
+    return "claude-sonnet-4-6"  # will fail with a clear error message later
+
+
+def _default_ensemble_models() -> list[str]:
+    """Pick ensemble models based on available API keys.
+
+    Cross-family ensembles are preferred for diversity, but if only one
+    provider key is set, use models from that provider only.
+    """
+    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+
+    if has_anthropic and has_openai:
+        return ["claude-sonnet-4-6", "gpt-4o-mini", "gpt-4o-mini"]
+    if has_anthropic:
+        return ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-haiku-4-5"]
+    if has_openai:
+        return ["gpt-4o", "gpt-4o-mini", "gpt-4o-mini"]
+    return ["claude-sonnet-4-6", "gpt-4o-mini", "gpt-4o-mini"]  # original default
+
+
 # ── Output Schema ──────────────────────────────────────────────────────────────
 
 
@@ -84,6 +115,7 @@ def run_judge(
     config: Optional[dict[str, Any]] = None,
     context: Optional[str] = None,
     spec_dir: Optional[str] = None,
+    query: Optional[str] = None,
 ) -> dict[str, Any]:
     """Execute an LLM-as-a-judge evaluation with safeguards.
 
@@ -93,12 +125,13 @@ def run_judge(
         config:   Optional judge config dict (model, temperature, ensemble).
         context:  Optional retrieved context for grounding checks.
         spec_dir: Directory of the spec file, used to resolve context_file paths.
+        query:    Optional original user query for evaluation context.
 
     Returns:
         dict with keys: passed, score, label, rationale, model
     """
     config = config or {}
-    model = config.get("model", "claude-sonnet-4-6")
+    model = config.get("model") or _default_judge_model()
     temperature = config.get("temperature", 0)  # Always default 0
     ensemble_cfg = config.get("ensemble", {})
 
@@ -108,20 +141,15 @@ def run_judge(
         effective_context = _load_context_file(rubric.context_file, spec_dir)
 
     system_prompt = _build_judge_system_prompt(rubric)
-    user_prompt = _build_judge_user_prompt(answer, rubric, effective_context)
-
-    import sys
-    print("====== LLM JUDGE PROMPT ======", file=sys.stderr)
-    print("SYSTEM:", system_prompt, file=sys.stderr)
-    print("USER:", user_prompt, file=sys.stderr)
-    print("==============================", file=sys.stderr)
+    user_prompt = _build_judge_user_prompt(answer, rubric, effective_context, query)
 
     if ensemble_cfg.get("enabled", False):
         return _run_ensemble(system_prompt, user_prompt, ensemble_cfg, rubric)
 
     verdict = _call_judge(model, system_prompt, user_prompt, temperature)
     threshold_score = _score_threshold(rubric.threshold)
-    passed = verdict.score >= threshold_score
+    # Pass if score meets threshold OR judge explicitly labeled as "pass"
+    passed = verdict.score >= threshold_score or verdict.label == "pass"
 
     return {
         "passed": passed,
@@ -172,11 +200,8 @@ def _run_ensemble(
     rubric: JudgeRubric,
 ) -> dict[str, Any]:
     """Majority vote across multiple judge models."""
-    models = config.get("models", [
-        "claude-sonnet-4-6",
-        "gpt-4o-mini",
-        "gpt-4o-mini",
-    ])
+    default_models = _default_ensemble_models()
+    models = config.get("models", default_models)
     verdicts = [_call_judge(m, system, user, temperature=0) for m in models]
     votes = [v.label for v in verdicts]
     majority = max(set(votes), key=votes.count)
@@ -227,10 +252,14 @@ def _call_anthropic(model: str, system: str, user: str, temperature: float) -> s
             "Set it to use LLM-as-a-judge evaluation."
         )
 
+    # Strip prefix if present
+    if model.startswith("anthropic:"):
+        model = model.split(":", 1)[1]
+
     client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
         model=model,
-        max_tokens=256,
+        max_tokens=1024,
         temperature=temperature,
         system=system,
         messages=[{"role": "user", "content": user}],
@@ -253,11 +282,15 @@ def _call_openai(model: str, system: str, user: str, temperature: float) -> str:
             "OPENAI_API_KEY environment variable not set."
         )
 
+    # Strip prefix if present
+    if model.startswith("openai:"):
+        model = model.split(":", 1)[1]
+
     client = openai.OpenAI(api_key=api_key)
     response = client.chat.completions.create(
         model=model,
         temperature=temperature,
-        max_tokens=256,
+        max_tokens=1024,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -267,25 +300,53 @@ def _call_openai(model: str, system: str, user: str, temperature: float) -> str:
 
 
 def _parse_verdict(raw: str) -> JudgeVerdict:
-    """Parse LLM response into a JudgeVerdict, with fallback extraction."""
+    """Parse LLM response into a JudgeVerdict, with robust fallback extraction."""
+    import re
+
     text = raw.strip()
-    # Try to extract JSON block if wrapped in markdown
+
+    # Strategy 1: Extract JSON from markdown code block
     if "```" in text:
-        import re
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
         if match:
             text = match.group(1)
 
+    # Strategy 2: Direct JSON parse
     try:
         data = json.loads(text)
         return JudgeVerdict(**data)
     except Exception:
-        # Fallback: treat as fail with explanation
-        return JudgeVerdict(
-            score=1,
-            label="fail",
-            rationale=f"Failed to parse judge response: {raw[:200]}",
-        )
+        pass
+
+    # Strategy 3: Find first JSON object containing "score" (handles preamble text)
+    match = re.search(r"\{[^{}]*\"score\"[^{}]*\}", text, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            return JudgeVerdict(**data)
+        except Exception:
+            pass
+
+    # Strategy 4: Extract fields via regex as last resort (handles truncated JSON)
+    score_match = re.search(r"\"score\"\s*:\s*(\d)", text)
+    label_match = re.search(r"\"label\"\s*:\s*\"(pass|fail|borderline)\"", text)
+    rationale_match = re.search(r"\"rationale\"\s*:\s*\"([^\"]{1,500})", text)
+    if score_match:
+        score = int(score_match.group(1))
+        if label_match:
+            label = label_match.group(1)
+        else:
+            # Label missing (likely truncated) — infer from score
+            label = "pass" if score >= 3 else "fail"
+        rationale = rationale_match.group(1) if rationale_match else "Extracted via regex fallback"
+        return JudgeVerdict(score=score, label=label, rationale=rationale)
+
+    # Final fallback: treat as fail with raw response for debugging
+    return JudgeVerdict(
+        score=1,
+        label="fail",
+        rationale=f"Failed to parse judge response: {raw[:300]}",
+    )
 
 
 # ── Prompt Builders ────────────────────────────────────────────────────────────
@@ -303,6 +364,15 @@ def _build_judge_system_prompt(rubric: JudgeRubric) -> str:
         prompt += "\nSCORING ANCHORS:\n"
         for anchor in rubric.scale:
             prompt += f"  {anchor}\n"
+    else:
+        prompt += (
+            "\nSCORING ANCHORS:\n"
+            "  1: Completely fails to address the rubric criteria\n"
+            "  2: Partially addresses the rubric but with significant issues\n"
+            "  3: Addresses the rubric with some gaps or minor inaccuracies\n"
+            "  4: Addresses the rubric well with only trivial omissions\n"
+            "  5: Perfectly addresses all rubric criteria\n"
+        )
     if rubric.few_shot_examples:
         prompt += "\nEXAMPLES:\n"
         for ex in rubric.few_shot_examples:
@@ -316,9 +386,12 @@ def _build_judge_user_prompt(
     answer: str,
     rubric: JudgeRubric,
     context: Optional[str],
+    query: Optional[str] = None,
 ) -> str:
     """Build the user-turn prompt for the judge."""
     parts = []
+    if query:
+        parts.append(f"USER QUERY:\n{query}\n")
     if context and rubric.context_file:
         # Doc-grounded judging: instruct judge to use ONLY the reference document
         parts.append(

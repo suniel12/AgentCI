@@ -147,7 +147,11 @@ class CorrectnessSpec(BaseModel):
     """Layer 1: Hard pass/fail. Any failure blocks the CI pipeline."""
     expected_in_answer: Optional[list[str]] = Field(
         None,
-        description="Strings that must appear in the answer (case-insensitive)",
+        description="Strings that must ALL appear in the answer (case-insensitive, AND logic)",
+    )
+    any_expected_in_answer: Optional[list[str]] = Field(
+        None,
+        description="At least ONE of these strings must appear in the answer (case-insensitive, OR logic)",
     )
     not_in_answer: Optional[list[str]] = Field(
         None,

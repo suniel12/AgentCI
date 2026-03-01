@@ -48,7 +48,7 @@ SUMMARY: 1 routing change, 1 cost spike across 5 test cases
 ## Quickstart
 
 ```bash
-pip install agentci
+pip install ciagent
 git clone https://github.com/agentci-org/DemoAgents.git
 cd DemoAgents
 make test
@@ -216,7 +216,7 @@ jobs:
 If you're a coding agent (Claude Code, Cursor, Codex, Copilot) integrating AgentCI into a project, see [`AGENTS.md`](AGENTS.md) for structured setup instructions, import patterns, and the full assertion API reference.
 
 Quick setup for any agent project:
-1. `pip install agentci`
+1. `pip install ciagent`
 2. Copy the test template from AGENTS.md
 3. Run `agentci init` to generate CI config
 4. Run `agentci run` to execute tests

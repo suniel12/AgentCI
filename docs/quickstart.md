@@ -5,7 +5,7 @@ Get up and running with Agent CI in less than 60 seconds.
 ## Installation
 
 ```bash
-pip install agentci
+pip install ciagent
 ```
 
 ## Running the Demo

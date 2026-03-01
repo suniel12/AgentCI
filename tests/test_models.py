@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from agentci.models import Span, SpanKind, Trace
+from agentci.models import Span, SpanKind, Trace, ToolCall
 
 
 def test_trace_initialization():
@@ -77,3 +77,76 @@ class TestSpanAttributes:
         )
         assert span.attributes["tool.args"]["pagination"]["page"] == 1
         assert "active" in span.attributes["tool.args"]["filters"]
+
+
+# ── Trace assertion helpers ──────────────────────────────────────────────────
+
+
+def _make_trace_with_tools(*tool_names: str, cost_usd: float = 0.0, llm_calls: int = 0) -> Trace:
+    """Helper: build a Trace with given tool calls in a single span."""
+    span = Span(kind=SpanKind.AGENT)
+    for name in tool_names:
+        span.tool_calls.append(ToolCall(tool_name=name))
+    trace = Trace(spans=[span])
+    trace.total_cost_usd = cost_usd
+    trace.total_llm_calls = llm_calls
+    return trace
+
+
+class TestTraceAssertionHelpers:
+    def test_called_returns_true_when_tool_in_sequence(self):
+        trace = _make_trace_with_tools("retrieve_docs", "grade_artifacts")
+        assert trace.called("retrieve_docs") is True
+
+    def test_called_returns_false_when_tool_absent(self):
+        trace = _make_trace_with_tools("grade_artifacts")
+        assert trace.called("retrieve_docs") is False
+
+    def test_called_empty_trace(self):
+        trace = Trace()
+        assert trace.called("any_tool") is False
+
+    def test_never_called_is_inverse_of_called_when_present(self):
+        trace = _make_trace_with_tools("retrieve_docs")
+        assert trace.never_called("retrieve_docs") is False
+
+    def test_never_called_is_inverse_of_called_when_absent(self):
+        trace = _make_trace_with_tools("grade_artifacts")
+        assert trace.never_called("retrieve_docs") is True
+
+    def test_loop_count_counts_single_occurrence(self):
+        trace = _make_trace_with_tools("retrieve_docs")
+        assert trace.loop_count("retrieve_docs") == 1
+
+    def test_loop_count_counts_multiple_occurrences(self):
+        trace = _make_trace_with_tools("rewrite_question", "retrieve_docs", "rewrite_question", "retrieve_docs")
+        assert trace.loop_count("rewrite_question") == 2
+        assert trace.loop_count("retrieve_docs") == 2
+
+    def test_loop_count_zero_for_absent_tool(self):
+        trace = _make_trace_with_tools("retrieve_docs")
+        assert trace.loop_count("rewrite_question") == 0
+
+    def test_cost_under_returns_true_when_below_threshold(self):
+        trace = _make_trace_with_tools(cost_usd=0.005)
+        assert trace.cost_under(0.01) is True
+
+    def test_cost_under_returns_false_when_at_threshold(self):
+        trace = _make_trace_with_tools(cost_usd=0.01)
+        assert trace.cost_under(0.01) is False
+
+    def test_cost_under_returns_false_when_above_threshold(self):
+        trace = _make_trace_with_tools(cost_usd=0.02)
+        assert trace.cost_under(0.01) is False
+
+    def test_llm_calls_under_returns_true_when_below_count(self):
+        trace = _make_trace_with_tools(llm_calls=3)
+        assert trace.llm_calls_under(5) is True
+
+    def test_llm_calls_under_returns_false_when_at_count(self):
+        trace = _make_trace_with_tools(llm_calls=5)
+        assert trace.llm_calls_under(5) is False
+
+    def test_llm_calls_under_returns_false_when_above_count(self):
+        trace = _make_trace_with_tools(llm_calls=7)
+        assert trace.llm_calls_under(5) is False
