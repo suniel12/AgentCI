@@ -13,7 +13,7 @@ echo "📂 Creating temporary workspace: $TEMP_DIR"
 mkdir "$TEMP_DIR"
 cd "$TEMP_DIR"
 
-# 2. Install (Simulate 'pip install agentci')
+# 2. Install (Simulate 'pip install ciagent')
 # in a real CI environment, we'd install from PyPI or git.
 # Here we install the local version in editable mode to test the CURRENT code.
 echo "📦 Installing AgentCI from local source..."

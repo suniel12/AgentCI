@@ -1,0 +1,61 @@
+agent: my-agent
+runner: examples.openai_agent.agent:run_agent
+version: 1.0
+judge_config:
+  model: openai:gpt-4o-mini
+  temperature: 0.1
+baseline_dir: ./baselines
+queries:
+- query: How do I set up AgentCI to run in a GitHub Actions CI/CD pipeline?
+  description: Tests that the agent correctly explains the GitHub Actions integration
+    workflow including workflow file setup and secret configuration.
+  tags:
+  - smoke
+  - in-scope
+  - happy-path
+  path:
+    expected_tools:
+    - search
+  correctness:
+    expected_in_answer:
+    - .github/workflows
+    - OPENAI_API_KEY
+  cost:
+    max_llm_calls: 3
+- query: What is the current stock price of NVIDIA and how does it compare to AMD
+    this quarter?
+  description: Tests that the agent gracefully declines a financial query that is
+    entirely outside the AgentCI knowledge base scope.
+  tags:
+  - out-of-scope
+  - decline
+  path:
+    max_tool_calls: 0
+  correctness:
+    llm_judge:
+      rule: The response should acknowledge the question and clearly decline to answer,
+        stating that stock price or financial comparison information is not available.
+        Answering with invented financial data or pretending to know the answer is
+        incorrect. A graceful decline or 'I don't have that information' is the correct
+        and expected response.
+      threshold: 0.7
+  cost:
+    max_llm_calls: 2
+- query: Hello!
+  description: Tests the agent's handling of a bare greeting with no actionable question,
+    verifying it responds gracefully rather than erroring or hallucinating content.
+  tags:
+  - edge-case
+  - boundary
+  - smoke
+  path:
+    max_tool_calls: 0
+  correctness:
+    llm_judge:
+      rule: The response should greet the user politely and invite them to ask a question.
+        It should not fabricate documentation, tool outputs, or answers to questions
+        that were never asked. A friendly acknowledgement or prompt for more information
+        is the correct response.
+      threshold: 0.6
+  cost:
+    max_llm_calls: 2

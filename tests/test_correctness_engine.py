@@ -56,6 +56,73 @@ class TestExpectedInAnswer:
         assert result.status == LayerStatus.FAIL
 
 
+# ── any_expected_in_answer (OR logic) ──────────────────────────────────────
+
+
+class TestAnyExpectedInAnswer:
+    def test_one_of_multiple_found_passes(self):
+        result = evaluate_correctness(
+            "Use pip install ciagent",
+            spec(any_expected_in_answer=["pip", "brew", "conda"]),
+        )
+        assert result.status == LayerStatus.PASS
+
+    def test_none_found_fails(self):
+        result = evaluate_correctness(
+            "Download from the website",
+            spec(any_expected_in_answer=["pip", "brew", "conda"]),
+        )
+        assert result.status == LayerStatus.FAIL
+        assert any("None of" in m for m in result.messages)
+
+    def test_case_insensitive(self):
+        result = evaluate_correctness(
+            "PIP INSTALL AGENTCI",
+            spec(any_expected_in_answer=["pip install"]),
+        )
+        assert result.status == LayerStatus.PASS
+
+    def test_pass_message_describes_match(self):
+        result = evaluate_correctness(
+            "Use pip or conda to install",
+            spec(any_expected_in_answer=["pip", "brew", "conda"]),
+        )
+        assert result.status == LayerStatus.PASS
+        assert any("any-of" in m for m in result.messages)
+        assert any("pip" in m for m in result.messages)
+
+    def test_details_populated(self):
+        result = evaluate_correctness(
+            "Use pip to install",
+            spec(any_expected_in_answer=["pip", "brew"]),
+        )
+        assert "any_expected_in_answer" in result.details
+        assert result.details["any_expected_in_answer"]["any_found"] is True
+        assert "pip" in result.details["any_expected_in_answer"]["found"]
+
+    def test_combined_with_expected_in_answer(self):
+        """Both AND and OR keyword checks can coexist."""
+        result = evaluate_correctness(
+            "pip install agentci version 3.10",
+            spec(
+                expected_in_answer=["3.10"],
+                any_expected_in_answer=["pip", "brew"],
+            ),
+        )
+        assert result.status == LayerStatus.PASS
+
+    def test_combined_any_passes_but_all_fails(self):
+        """OR passes but AND fails -> overall FAIL."""
+        result = evaluate_correctness(
+            "Use pip to install",
+            spec(
+                expected_in_answer=["3.10"],  # missing -> FAIL
+                any_expected_in_answer=["pip", "brew"],  # found -> PASS
+            ),
+        )
+        assert result.status == LayerStatus.FAIL
+
+
 # ── not_in_answer ──────────────────────────────────────────────────────────────
 
 
@@ -344,3 +411,46 @@ class TestDescriptivePassMessages:
             result = evaluate_correctness("helpful answer", s)
         assert result.status == LayerStatus.PASS
         assert any("LLM judge passed" in m for m in result.messages)
+
+
+# ── metadata fallback integration ────────────────────────────────────────────
+
+
+class TestMetadataFallbackIntegration:
+    """Verify evaluate_query works when the answer is only in trace.metadata."""
+
+    def test_keyword_check_passes_via_metadata(self):
+        """evaluate_query should find keywords in metadata['final_output']."""
+        from agentci.engine.runner import evaluate_query
+        from agentci.models import Trace, Span
+        from agentci.schema.spec_models import GoldenQuery, CorrectnessSpec
+
+        trace = Trace(
+            spans=[Span(name="agent", output_data=None)],
+            metadata={"final_output": "Use pip install ciagent to get started"},
+        )
+        query = GoldenQuery(
+            query="How do I install?",
+            correctness=CorrectnessSpec(expected_in_answer=["pip install ciagent"]),
+        )
+        result = evaluate_query(query, trace)
+        assert result.correctness is not None
+        assert result.correctness.status == LayerStatus.PASS
+
+    def test_keyword_check_fails_without_metadata(self):
+        """Without metadata fallback, empty output should fail keyword check."""
+        from agentci.engine.runner import evaluate_query
+        from agentci.models import Trace, Span
+        from agentci.schema.spec_models import GoldenQuery, CorrectnessSpec
+
+        trace = Trace(
+            spans=[Span(name="agent", output_data=None)],
+            metadata={},
+        )
+        query = GoldenQuery(
+            query="How do I install?",
+            correctness=CorrectnessSpec(expected_in_answer=["pip install ciagent"]),
+        )
+        result = evaluate_query(query, trace)
+        assert result.correctness is not None
+        assert result.correctness.status == LayerStatus.FAIL

@@ -18,6 +18,11 @@ from agentci.exceptions import BaselineError
 from agentci.models import Span, SpanKind, Trace
 from agentci.schema.spec_models import AgentCISpec, CorrectnessSpec, GoldenQuery
 
+# Force runner module import before any patches.  Without this,
+# patch("agentci.engine.correctness.evaluate_correctness") can cause
+# runner.py's first import to bind the Mock instead of the real function.
+import agentci.engine.runner  # noqa: F401
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 

@@ -32,7 +32,7 @@ beyond smoke tests.
 ```yaml
 # ⚠️  ADVANCED / BRITTLE — prefer llm_judge for production tests
 correctness:
-  expected_in_answer: ["pip install agentci"]
+  expected_in_answer: ["pip install ciagent"]
   not_in_answer: ["error", "failed"]
 ```
 
@@ -71,7 +71,7 @@ correctness:
 **Before (brittle):**
 ```yaml
 correctness:
-  expected_in_answer: ["pip install agentci", "Python 3.10"]
+  expected_in_answer: ["pip install ciagent", "Python 3.10"]
 ```
 
 **After (robust):**

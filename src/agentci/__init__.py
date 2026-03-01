@@ -16,13 +16,13 @@ v2 exports (new declarative evaluation engine):
 
 try:
     from importlib.metadata import version
-    __version__ = version("agentci")
+    __version__ = version("ciagent")
 except Exception:
     __version__ = "0.0.0"
 
 # ── v1 exports (preserved for backward compatibility) ─────────────────────────
 from .pytest_plugin import test
-from .capture import TraceContext
+from .capture import TraceContext, langgraph_trace
 from .diff_engine import diff, load_baseline
 
 # ── v2 exports ─────────────────────────────────────────────────────────────────
@@ -39,6 +39,7 @@ __all__ = [
     # v1
     "test",
     "TraceContext",
+    "langgraph_trace",
     "diff",
     "load_baseline",
     # v2

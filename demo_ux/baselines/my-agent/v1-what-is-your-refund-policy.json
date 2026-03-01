@@ -1,0 +1,105 @@
+{
+  "version": "v1",
+  "agent": "my-agent",
+  "captured_at": "2026-02-27T18:26:58.167678+00:00",
+  "query": "What is your refund policy?",
+  "metadata": {
+    "model": "auto",
+    "precheck_passed": false
+  },
+  "trace": {
+    "trace_id": "b8fde6d85d9945ca",
+    "created_at": "2026-02-27T18:26:58.167056Z",
+    "spans": [
+      {
+        "span_id": "76053d1de1824201",
+        "parent_span_id": null,
+        "kind": "agent",
+        "name": "dummy_agent",
+        "input_data": null,
+        "output_data": null,
+        "stop_reason": null,
+        "graph_state": {},
+        "tool_calls": [],
+        "llm_calls": [],
+        "total_tokens_in": 0,
+        "total_tokens_out": 0,
+        "total_cost_usd": 0.0,
+        "duration_ms": 0.0,
+        "metadata": {},
+        "attributes": {},
+        "from_agent": null,
+        "to_agent": null,
+        "guardrail_name": null,
+        "guardrail_triggered": false
+      },
+      {
+        "span_id": "7e06832279314777",
+        "parent_span_id": null,
+        "kind": "tool_call",
+        "name": "dummy_tool",
+        "input_data": {
+          "q": "What is your refund policy?"
+        },
+        "output_data": null,
+        "stop_reason": null,
+        "graph_state": {},
+        "tool_calls": [
+          {
+            "tool_name": "dummy_tool",
+            "arguments": {
+              "q": "What is your refund policy?"
+            },
+            "result": null,
+            "error": null,
+            "timestamp": "2026-02-27T18:26:58.167098+00:00",
+            "duration_ms": 0.0
+          }
+        ],
+        "llm_calls": [],
+        "total_tokens_in": 0,
+        "total_tokens_out": 0,
+        "total_cost_usd": 0.0,
+        "duration_ms": 0.0,
+        "metadata": {},
+        "attributes": {},
+        "from_agent": null,
+        "to_agent": null,
+        "guardrail_name": null,
+        "guardrail_triggered": false
+      },
+      {
+        "span_id": "0dcc5f0fe497458c",
+        "parent_span_id": null,
+        "kind": "agent",
+        "name": "output",
+        "input_data": null,
+        "output_data": "Processed: What is your refund policy?",
+        "stop_reason": null,
+        "graph_state": {},
+        "tool_calls": [],
+        "llm_calls": [],
+        "total_tokens_in": 0,
+        "total_tokens_out": 0,
+        "total_cost_usd": 0.0,
+        "duration_ms": 0.0,
+        "metadata": {},
+        "attributes": {},
+        "from_agent": null,
+        "to_agent": null,
+        "guardrail_name": null,
+        "guardrail_triggered": false
+      }
+    ],
+    "total_cost_usd": 0.0,
+    "total_tokens": 0,
+    "total_duration_ms": 0.03020837903022766,
+    "total_llm_calls": 0,
+    "total_tool_calls": 1,
+    "test_name": "demo",
+    "agent_name": "dummy_agent",
+    "framework": "",
+    "graph_state": {},
+    "metadata": {}
+  }
+}

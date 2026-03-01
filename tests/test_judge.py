@@ -94,10 +94,12 @@ class TestBuildSystemPrompt:
         assert "EXAMPLES" in prompt
         assert "score: 4" in prompt or "4" in prompt
 
-    def test_no_scale_no_examples_clean_prompt(self):
+    def test_no_scale_uses_default_anchors(self):
         rubric = make_rubric()
         prompt = _build_judge_system_prompt(rubric)
-        assert "SCORING ANCHORS" not in prompt
+        assert "SCORING ANCHORS" in prompt
+        assert "Completely fails to address" in prompt
+        assert "Perfectly addresses all rubric" in prompt
         assert "EXAMPLES" not in prompt
 
 
@@ -120,6 +122,17 @@ class TestBuildUserPrompt:
         rubric = make_rubric()
         prompt = _build_judge_user_prompt("answer", rubric, context=None)
         assert "RETRIEVED CONTEXT" not in prompt
+
+    def test_includes_query_when_provided(self):
+        rubric = make_rubric()
+        prompt = _build_judge_user_prompt("answer", rubric, context=None, query="What is AgentCI?")
+        assert "USER QUERY:" in prompt
+        assert "What is AgentCI?" in prompt
+
+    def test_no_query_section_when_none(self):
+        rubric = make_rubric()
+        prompt = _build_judge_user_prompt("answer", rubric, context=None, query=None)
+        assert "USER QUERY" not in prompt
 
 
 # ── _parse_verdict ────────────────────────────────────────────────────────────

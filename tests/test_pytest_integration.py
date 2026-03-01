@@ -22,3 +22,29 @@ def test_decorated_agent(agentci_trace):
 def test_simple_decorator(agentci_trace):
     """Verify decorator works without arguments."""
     assert agentci_trace is not None
+
+pytest_plugins = ["pytester"]
+
+def test_pytest_plugin_collects_spec(pytester):
+    """Verify that pytest automatically collects and parses agentci_spec.yaml."""
+    pytester.makefile(".yaml", agentci_spec="""
+agent: test-agent
+runner: dummy:run
+version: 1.0
+queries:
+  - query: "Hello World"
+    description: "Basic greeting"
+    """)
+    
+    # Write a dummy python runner so it doesn't fail import
+    pytester.makepyfile(dummy="""
+from agentci.models import Trace
+def run(query: str):
+    return Trace(agent_name="dummy", test_name="t1")
+    """)
+    
+    result = pytester.runpytest("--collect-only")
+    result.stdout.fnmatch_lines([
+        "*<AgentCIFile agentci_spec.yaml>*",
+        "*<AgentCIItem 01_Hello World>*",
+    ])

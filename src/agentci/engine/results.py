@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 
 class LayerStatus(str, Enum):
@@ -36,6 +37,7 @@ class QueryResult:
     correctness: LayerResult
     path: LayerResult
     cost: LayerResult
+    trace: Any = None  # Using Any to avoid circular imports without TYPE_CHECKING string annotations parsing issues
 
     @property
     def hard_fail(self) -> bool:

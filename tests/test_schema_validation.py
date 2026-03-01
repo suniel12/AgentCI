@@ -169,6 +169,26 @@ def test_nested_correctness_path_cost_on_single_query():
     assert q.cost.max_cost_usd == 0.05
 
 
+def test_any_expected_in_answer_accepted_in_schema():
+    q = GoldenQuery(
+        query="Test query",
+        correctness=CorrectnessSpec(any_expected_in_answer=["pip", "brew", "conda"]),
+    )
+    assert q.correctness.any_expected_in_answer == ["pip", "brew", "conda"]
+
+
+def test_both_expected_and_any_expected_coexist():
+    q = GoldenQuery(
+        query="Test query",
+        correctness=CorrectnessSpec(
+            expected_in_answer=["3.10"],
+            any_expected_in_answer=["pip", "brew"],
+        ),
+    )
+    assert q.correctness.expected_in_answer == ["3.10"]
+    assert q.correctness.any_expected_in_answer == ["pip", "brew"]
+
+
 # ── Invalid specs — must raise ValidationError ───────────────────────────────
 
 

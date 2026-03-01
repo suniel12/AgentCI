@@ -1,6 +1,6 @@
 [project]
-name = "agentci"
-version = "0.2.0"
+name = "ciagent"
+version = "0.4.2"
 description = "Continuous Integration for AI Agents. Catch cost spikes and logic regressions before production."
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -24,6 +24,7 @@ dependencies = [
     "opentelemetry-api>=1.20",
     "opentelemetry-sdk>=1.20",
     "pytest>=7.0",
+    "python-dotenv>=0.19",
 ]
 
 [project.urls]

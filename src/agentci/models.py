@@ -196,6 +196,26 @@ class Trace(BaseModel):
             calls.extend(span.tool_calls)
         return calls
 
+    def called(self, tool_name: str) -> bool:
+        """True if tool_name appears anywhere in the execution trace."""
+        return tool_name in self.tool_call_sequence
+
+    def never_called(self, tool_name: str) -> bool:
+        """True if tool_name was never called."""
+        return tool_name not in self.tool_call_sequence
+
+    def loop_count(self, tool_name: str) -> int:
+        """Number of times tool_name was called (for loop detection)."""
+        return self.tool_call_sequence.count(tool_name)
+
+    def cost_under(self, threshold_usd: float) -> bool:
+        """True if total cost is below threshold."""
+        return self.total_cost_usd < threshold_usd
+
+    def llm_calls_under(self, count: int) -> bool:
+        """True if total LLM calls is below count."""
+        return self.total_llm_calls < count
+
     def get_handoffs(self) -> list[Span]:
         """Return all HANDOFF spans in order.
 

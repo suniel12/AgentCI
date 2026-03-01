@@ -17,7 +17,7 @@ Since AgentCI is a CI tool, the ultimate test is running it in a real GitHub Act
     git init
     
     # Install agentci (if not installed globally)
-    # pip install agentci 
+    # pip install ciagent
     # OR if you are developing locally, point to your local version
     
     # Initialize AgentCI project
