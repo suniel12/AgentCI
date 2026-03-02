@@ -2,9 +2,9 @@ name: AgentCI Checks
 
 on:
   push:
-    branches: [main, master, v2]
+    branches: [main, master, v3]
   pull_request:
-    branches: [main, master, v2]
+    branches: [main, master, v3]
 
 jobs:
   agentci-deterministic:
