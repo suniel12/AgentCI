@@ -179,11 +179,87 @@ Clone the [DemoAgents](https://github.com/agentci-org/DemoAgents) repo and try t
 ## CLI
 
 ```bash
-agentci init         # Generate CI config (GitHub Actions + pre-push hooks)
-agentci run          # Run all tests (pytest-compatible)
-agentci record       # Record golden baseline traces
-agentci diff         # Diff current run against baseline
-agentci report       # Generate HTML report from results
+# ── Setup & Scaffolding ──────────────────────────────────────────────
+agentci init              # Scaffold GitHub Actions + pre-push hooks
+agentci init --generate   # Guided interview: auto-scan project, generate agentci_spec.yaml
+agentci init --generate --mode mock --golden-file qa.json  # Zero-API-key spec generation
+agentci doctor            # Health check: spec, deps, API keys, KB, CI workflow
+agentci validate          # Validate agentci_spec.yaml against schema (no execution)
+agentci bootstrap         # Quick setup from a queries file + runner path
+
+# ── Testing & Evaluation ─────────────────────────────────────────────
+agentci test              # Run 3-layer evaluation (Correctness → Path → Cost)
+agentci test --mock       # Zero-cost synthetic traces — no API keys needed
+agentci test --yes        # Skip cost-estimate confirmation (CI-friendly)
+agentci test --workers 4  # Parallel execution
+agentci eval              # Standalone correctness evaluation (no golden baselines)
+
+# ── Golden Baselines ─────────────────────────────────────────────────
+agentci record            # Record a golden baseline trace from a live run
+agentci save --agent my-agent --version v1 --trace-file trace.json  # Save versioned baseline
+agentci baselines --agent my-agent  # List saved baseline versions
+agentci diff --agent my-agent --baseline v1 --compare v2  # Diff two versions
+
+# ── Reporting ─────────────────────────────────────────────────────────
+agentci run               # Legacy test runner (pytest-compatible)
+agentci report            # Generate HTML report from results JSON
+```
+
+## 3-Layer Evaluation Engine
+
+`agentci test` evaluates every query through three layers:
+
+| Layer | Severity | Purpose | Example |
+|-------|----------|---------|---------|
+| **Correctness** | Hard FAIL (blocks CI) | Answer quality | `expected_in_answer`, `llm_judge`, `not_in_answer`, `regex_match`, `json_schema` |
+| **Path** | Soft WARN (annotation only) | Tool trajectory | `expected_tools`, `min_tool_recall`, `max_loops` |
+| **Cost** | Soft WARN (annotation only) | Efficiency budget | `max_llm_calls`, `max_tokens`, `max_cost_usd` |
+
+Layer 1 failures block CI (exit code 1). Layers 2-3 produce GitHub annotations but let CI pass.
+
+```yaml
+# agentci_spec.yaml — one query with all three layers
+queries:
+  - query: "How do I install AgentCI?"
+    correctness:
+      any_expected_in_answer: ["pip install", "ciagent"]
+      llm_judge:
+        - rule: "Response provides clear installation instructions"
+          threshold: 0.7
+    path:
+      expected_tools: [retrieve_docs]
+      min_tool_recall: 1.0
+    cost:
+      max_llm_calls: 8
+```
+
+## Mock Mode
+
+Test your spec structure with zero API keys and zero cost:
+
+```bash
+agentci test --mock
+```
+
+Mock mode generates synthetic traces that match your spec expectations. Use it to:
+- Validate spec structure before spending on live runs
+- Run in CI without API keys for fast feedback
+- Iterate on assertions without waiting for LLM responses
+
+## Cost Estimation
+
+Before live test runs, AgentCI shows a cost estimate:
+
+```bash
+$ agentci test
+Estimated cost: $0.12 – $0.35 (12 queries)
+Proceed? [y/N] y
+```
+
+Skip the prompt in CI with `--yes` or `-y`:
+
+```bash
+agentci test --yes  # no confirmation prompt
 ```
 
 ## CI/CD
@@ -258,13 +334,18 @@ When you diff a current run against a golden baseline, AgentCI flags these chang
 
 ## Status
 
-AgentCI is in **early release** (v0.1.x). The core trace model, diffing engine, assertion library, mock system, and CLI are stable. The API may evolve based on community feedback.
+AgentCI is in **beta** (v0.5.0). The core trace model, diffing engine, 3-layer evaluation engine, mock system, and CLI are stable. The API may evolve based on community feedback.
 
 **What's here today:**
+- 3-layer evaluation engine (Correctness / Path / Cost)
 - Trace capture for LangGraph, Anthropic, and OpenAI Agents SDK
-- Golden baseline recording and regression diffing
+- Golden baseline recording, versioned saves, and regression diffing
 - LLM mocking for all three frameworks (zero API keys)
-- LLM-as-judge assertions for subjective output grading
+- LLM-as-judge with composite rubrics, ensemble judging, and doc-grounded evaluation
+- Mock mode (`agentci test --mock`) for zero-cost spec validation
+- Guided spec generation (`agentci init --generate`) with auto-scan and KB sampling
+- Health check (`agentci doctor`) for environment validation
+- Cost estimation before live runs
 - Pytest plugin for native integration
 - GitHub Actions generator via `agentci init`
 
