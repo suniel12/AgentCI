@@ -8,6 +8,7 @@ object. The developer doesn't change their agent code at all.
 Phase 1: Patch openai.ChatCompletion and anthropic.Messages
 Phase 2: Add OTEL span emission for interop with Arize/Langfuse
 """
+from __future__ import annotations
 
 import time
 import contextvars

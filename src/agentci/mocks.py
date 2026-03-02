@@ -4,6 +4,7 @@ Lightweight mock tools for zero-API-key testing.
 Developers define mock responses in YAML or Python.
 The demo agent ships with these pre-configured.
 """
+from __future__ import annotations
 
 from typing import Any, Callable
 from .models import ToolCall
