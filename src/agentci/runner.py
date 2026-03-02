@@ -4,6 +4,7 @@ Test execution engine.
 Loads a TestSuite, executes each TestCase by importing the agent function,
 wrapping it in TraceContext, and collecting results.
 """
+from __future__ import annotations
 
 from .models import TestSuite, SuiteResult
 

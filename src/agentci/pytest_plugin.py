@@ -3,6 +3,7 @@ pytest integration plugin.
 
 Provides fixtures and hooks for running AgentCI tests via pytest.
 """
+from __future__ import annotations
 
 import pytest
 import functools
