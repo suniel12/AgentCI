@@ -25,11 +25,51 @@ pip install ciagent[all]         # All frameworks
 ## CLI Commands
 
 ```bash
+# ── Setup & Scaffolding ──────────────────────────────────────────────
 agentci init                          # Scaffold GitHub Actions workflow + optional pre-push hook
 agentci init --hook                   # Also install .git/hooks/pre-push
 agentci init --force                  # Overwrite existing files
+agentci init --generate               # Guided interview: auto-scan, generate agentci_spec.yaml
+agentci init --generate --mode mock   # Non-interactive mock mode
+agentci init --generate --mode mock --golden-file qa.json  # Zero-API-key spec from Q&A file
+agentci init --generate --kb-path ./docs  # Specify knowledge base directory
 
-agentci run                           # Execute test suite from agentci.yaml
+agentci doctor                        # Health check: spec, deps, API keys, KB, CI workflow
+agentci doctor --config path.yaml     # Check a specific config file
+
+agentci validate agentci_spec.yaml    # Validate spec against schema (no execution)
+
+agentci bootstrap                     # Quick setup from queries file + runner path
+agentci bootstrap --queries q.txt --runner myagent:run --output spec.yaml
+
+# ── Testing & Evaluation (v2 commands) ────────────────────────────────
+agentci test                          # 3-layer evaluation (Correctness → Path → Cost)
+agentci test --mock                   # Zero-cost synthetic traces — no API keys needed
+agentci test --yes                    # Skip cost-estimate confirmation (CI-friendly)
+agentci test --workers 4              # Parallel execution
+agentci test --tags routing           # Filter queries by tag
+agentci test --format json            # Machine-readable JSON output
+agentci test --sample-ensemble 3      # LLM judge ensemble (majority vote)
+
+agentci eval                          # Standalone correctness evaluation (no golden baselines)
+agentci eval --config spec.yaml       # Evaluate a specific spec
+agentci eval --tags safety            # Filter by tag
+
+# ── Golden Baselines ─────────────────────────────────────────────────
+agentci record <test_name>            # Run agent live, save golden baseline
+agentci record <test_name> -o path/   # Specify output path
+
+agentci save --agent my-agent --version v1 --trace-file trace.json  # Save versioned baseline
+agentci save --agent my-agent --version v2 --trace-file t.json --force-save  # Skip precheck
+
+agentci baselines --agent my-agent    # List saved baseline versions for an agent
+
+agentci diff --agent my-agent --baseline v1 --compare v2  # Diff two baseline versions
+agentci diff --agent my-agent --baseline v1 --compare v2 --format json  # JSON output
+agentci diff --spec-path spec.yaml --baseline-dir baselines/  # With custom paths
+
+# ── Legacy & Reporting ────────────────────────────────────────────────
+agentci run                           # Legacy test suite runner (pytest-compatible)
 agentci run -s path/to/suite.yaml     # Specify suite file
 agentci run -n 5                      # Statistical mode: run 5 times
 agentci run -t routing -t cost        # Filter tests by tag
@@ -37,11 +77,6 @@ agentci run --no-diff                 # Skip golden trace comparison
 agentci run --fail-on-cost 0.50       # Fail if total cost exceeds $0.50
 agentci run --ci                      # CI mode: exit code 1 on any failure
 agentci run --json                    # Machine-readable JSON output
-
-agentci record <test_name>            # Run agent live, save golden baseline
-agentci record <test_name> -o path/   # Specify output path
-
-agentci diff <test_name>              # Compare latest run against golden trace
 
 agentci report -i results.json -o report.html  # Generate HTML report
 ```

@@ -37,7 +37,7 @@ def _print_error_panel(e):
         text.append(e.fix)
     console.print(Panel(text, title=f"[bold red]{e.__class__.__name__}[/]", border_style="red"))
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 
 # ── agentci init --generate helpers ───────────────────────────────────────────
