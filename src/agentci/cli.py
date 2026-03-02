@@ -9,6 +9,7 @@ Commands:
   agentci diff          Compare latest run against golden
   agentci report        Generate HTML report from last run
 """
+from __future__ import annotations
 
 import os
 import sys
