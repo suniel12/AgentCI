@@ -226,9 +226,14 @@ def _detect_tools_from_code(project_dir) -> list[str]:
             continue
         # @tool decorated functions
         tools.extend(tool_pattern.findall(content))
-        # bind_tools([tool1, tool2])
+        # bind_tools([tool1, tool2]) or bind_tools([{"name": "...", ...}])
         for match in bind_pattern.findall(content):
-            tools.extend(name.strip().strip("'\"") for name in match.split(","))
+            if "{" in match:
+                # Dict-style tool schemas — extract "name" values
+                name_pattern = re.compile(r'"name"\s*:\s*"([^"]+)"')
+                tools.extend(name_pattern.findall(match))
+            else:
+                tools.extend(name.strip().strip("'\"") for name in match.split(","))
 
     # Deduplicate, preserve order
     seen: set[str] = set()
@@ -285,6 +290,56 @@ def _load_golden_pairs(path: str) -> list[dict]:
         return pairs
 
     return []
+
+
+_STOPWORDS = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "need", "must", "that",
+    "this", "these", "those", "with", "from", "into", "about", "for",
+    "and", "but", "not", "you", "your", "our", "their", "its", "also",
+    "just", "only", "very", "more", "most", "some", "any", "each",
+    "which", "who", "whom", "what", "when", "where", "how", "than",
+    "then", "there", "here", "other", "such", "like", "well", "back",
+})
+
+
+def _extract_keywords_from_answer(answer: str, max_keywords: int = 5) -> list[str]:
+    """Extract distinctive keywords from a golden-file answer.
+
+    Returns up to *max_keywords* words (>3 chars, not stopwords) that can
+    serve as ``any_expected_in_answer`` assertions.  Users are expected to
+    refine these after generation.
+    """
+    import re
+    words = re.findall(r"[A-Za-z0-9_.$/-]{4,}", answer)
+    seen: set[str] = set()
+    keywords: list[str] = []
+    for w in words:
+        low = w.lower()
+        if low in _STOPWORDS or low in seen:
+            continue
+        seen.add(low)
+        keywords.append(w)
+        if len(keywords) >= max_keywords:
+            break
+    return keywords
+
+
+def _build_golden_queries(pairs: list[dict]) -> list[dict]:
+    """Convert golden Q&A pairs into query dicts with keyword assertions."""
+    queries: list[dict] = []
+    for p in pairs:
+        query_dict: dict = {
+            "query": p["question"],
+            "description": f"Golden: {p['question'][:50]}",
+        }
+        if p.get("answer"):
+            keywords = _extract_keywords_from_answer(p["answer"])
+            if keywords:
+                query_dict["correctness"] = {"any_expected_in_answer": keywords}
+        queries.append(query_dict)
+    return queries
 
 
 _RUNNER_FN_NAMES = {"run_for_agentci", "run_agent", "run_for_agent", "run"}
@@ -408,9 +463,15 @@ def _generate_skeleton_spec(
         queries_yaml += """
   - query: "TODO: Replace with a topic your agent handles"
     description: "In-scope conversational test"
+    correctness:
+      any_expected_in_answer: ["TODO: keyword1", "TODO: keyword2"]
+    cost:
+      max_llm_calls: 8
 
   - query: "TODO: Replace with a topic your agent should decline"
     description: "Out-of-scope — agent should refuse"
+    cost:
+      max_llm_calls: 2
 """
 
     return f"""agent: my-agent
@@ -559,7 +620,9 @@ For each query, produce a YAML block with:
 - tags: list of tags (smoke, in-scope, out-of-scope, edge-case, etc.)
 - path: expected_tools list OR max_tool_calls: 0 for decline cases
 - correctness: use any_expected_in_answer (OR logic) for list-type answers,
-  expected_in_answer (AND logic) only when ALL terms are essential, or llm_judge rule
+  expected_in_answer (AND logic) only when ALL terms are essential, or llm_judge rule.
+  For judge rules on in-scope queries, include context_file pointing to the KB file
+  that contains the answer so the judge can verify against the actual documentation.
 - cost: max_llm_calls budget (default 8 for in-scope queries)
 
 JUDGE RULE GUIDELINES:
@@ -628,11 +691,34 @@ GOOD (evaluates helpfulness):
         any AgentCI facts unprompted."
   threshold: 0.7
 
+6. DOC-GROUNDED JUDGING (context_file):
+   For in-scope queries where the agent retrieves from a KB, ALWAYS include
+   context_file pointing to the KB file that contains the answer. This lets
+   the judge verify the answer against the actual document instead of guessing.
+   The file paths are listed in the KNOWLEDGE BASE CONTENT section above.
+
+   Example:
+     llm_judge:
+       - rule: "The answer should accurately describe the feature based on
+               retrieved documentation."
+         threshold: 0.7
+         context_file: knowledge_base/features.md
+
+   Do NOT use context_file for out-of-scope or greeting queries (no KB to check).
+   Pick the MOST RELEVANT KB file for each query — the one most likely to
+   contain the answer.
+
 Respond ONLY with valid YAML (a list of query objects, no surrounding text).
 """
 
     if os.environ.get("ANTHROPIC_API_KEY"):
-        import anthropic as _anthropic
+        try:
+            import anthropic as _anthropic
+        except ImportError:
+            raise ImportError(
+                "anthropic package required for AI generation. "
+                "Install it with: pip install ciagent[anthropic]"
+            )
         client = _anthropic.Anthropic()
         message = client.messages.create(
             model="claude-sonnet-4-6",
@@ -641,7 +727,13 @@ Respond ONLY with valid YAML (a list of query objects, no surrounding text).
         )
         raw = message.content[0].text.strip()
     else:
-        import openai as _openai
+        try:
+            import openai as _openai
+        except ImportError:
+            raise ImportError(
+                "openai package required for AI generation. "
+                "Install it with: pip install ciagent[openai]"
+            )
         client = _openai.OpenAI()
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -769,13 +861,17 @@ def _calibrate_spec_from_traces(
 @click.version_option(version=__version__, prog_name="agentci")
 def cli():
     """Agent CI — Continuous Integration for AI Agents"""
+    # Suppress noisy Python warnings (Pydantic serializer, deprecations, etc.)
+    import warnings
+    warnings.filterwarnings("ignore")
+
     # Load .env variables
     try:
         from dotenv import load_dotenv
         load_dotenv()
     except ImportError:
         pass
-    
+
     # Ensure current directory is in sys.path so we can import agents
     import sys
     import os
@@ -799,7 +895,9 @@ def cli():
               help='Test run mode: live (real API) or mock (synthetic traces)')
 @click.option('--golden-file', default=None, type=click.Path(exists=True),
               help='Path to golden Q&A pairs (JSON/CSV) for mock mode')
-def init(hook, force, example, generate, agent_description, kb_path, run_mode, golden_file):
+@click.option('--runner', default=None,
+              help='Runner import path (e.g. myagent.run:run_agent). Skips prompt.')
+def init(hook, force, example, generate, agent_description, kb_path, run_mode, golden_file, runner):
     """Scaffold a new AgentCI test suite and CI/CD pipeline."""
     import jinja2
     from rich.prompt import Prompt
@@ -810,6 +908,9 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
             "[yellow]Warning:[/] --agent-description is deprecated. "
             "Agent type is now auto-detected from code."
         )
+
+    # Non-interactive when --mode is provided (signals CI/pipeline usage)
+    non_interactive = run_mode is not None
 
     # Track whether we generated real queries vs skeleton
     has_queries = True
@@ -879,6 +980,8 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                 # Confirm KB path
                 if kb_path:
                     interview["kb_path"] = kb_path
+                elif detected_kb and non_interactive:
+                    interview["kb_path"] = detected_kb
                 elif detected_kb:
                     from pathlib import Path as _P
                     kb_file_count = len([f for f in _P(detected_kb).rglob("*") if f.suffix.lower() in {".md", ".txt"}])
@@ -891,6 +994,9 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                     # Re-scan if user changed path
                     if confirmed_kb != detected_kb:
                         context = _scan_project(Path("."), kb_override=confirmed_kb)
+                elif non_interactive:
+                    interview["kb_path"] = "./knowledge_base"
+                    context = _scan_project(Path("."), kb_override=interview["kb_path"])
                 else:
                     interview["kb_path"] = Prompt.ask(
                         "\n[bold]Q2.[/] Where is your knowledge base directory?",
@@ -903,7 +1009,7 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                     interview["golden_pairs"] = _load_golden_pairs(golden_file)
                     if interview["golden_pairs"]:
                         console.print(f"Loaded [cyan]{len(interview['golden_pairs'])}[/] golden pairs from file")
-                else:
+                elif not non_interactive:
                     golden_path = Prompt.ask(
                         "\n    Golden Q&A pairs? (JSON/CSV path, or Enter to skip)",
                         default="",
@@ -912,22 +1018,27 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                         interview["golden_pairs"] = _load_golden_pairs(golden_path)
 
             elif agent_type == "tool":
-                if detected_tools:
+                if non_interactive:
+                    if detected_tools:
+                        interview["tools"] = detected_tools
+                elif detected_tools:
                     tools_str = Prompt.ask(
                         f"\n[bold]Q2.[/] Confirm detected tools\n"
                         f"    [dim]{', '.join(detected_tools)}[/]\n"
                         f"    [dim](Enter to confirm, or type comma-separated list)[/]",
                         default=", ".join(detected_tools),
                     )
+                    if tools_str:
+                        interview["tools"] = [t.strip() for t in tools_str.split(",") if t.strip()]
                 else:
                     tools_str = Prompt.ask(
                         "\n[bold]Q2.[/] What tools does your agent use? (comma-separated)",
                         default="",
                     )
-                if tools_str:
-                    interview["tools"] = [t.strip() for t in tools_str.split(",") if t.strip()]
+                    if tools_str:
+                        interview["tools"] = [t.strip() for t in tools_str.split(",") if t.strip()]
 
-            else:  # conversational
+            elif not non_interactive:  # conversational — skip in non-interactive
                 handle = Prompt.ask(
                     "\n[bold]Q2a.[/] Topics to handle? (comma-separated, optional)",
                     default="",
@@ -944,12 +1055,19 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
             # ── Step 5: Runner detection ─────────────────────────────
             detected_runner = _detect_runner(Path("."))
             runner_default = detected_runner or "myagent.run:run_agent"
-            if detected_runner:
-                console.print(f"\nDetected runner: [cyan]{detected_runner}[/]")
-            runner_path = Prompt.ask(
-                "Runner import path",
-                default=runner_default,
-            )
+            if runner:
+                runner_path = runner
+            elif non_interactive:
+                runner_path = runner_default
+                if detected_runner:
+                    console.print(f"Auto-detected runner: [cyan]{detected_runner}[/]")
+            else:
+                if detected_runner:
+                    console.print(f"\nDetected runner: [cyan]{detected_runner}[/]")
+                runner_path = Prompt.ask(
+                    "Runner import path",
+                    default=runner_default,
+                )
 
             # ── Step 6: Query generation (branched by mode) ──────────
             queries = None
@@ -962,25 +1080,19 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                     # Option 1: Golden file provided via flag
                     pairs = _load_golden_pairs(golden_file)
                     if pairs:
-                        queries = [
-                            {"query": p["question"], "description": f"Golden: {p['question'][:50]}"}
-                            for p in pairs
-                        ]
+                        queries = _build_golden_queries(pairs)
                         has_queries = True
                         console.print(f"Using [cyan]{len(queries)}[/] queries from golden file")
                 elif interview.get("golden_pairs"):
                     # Option 1b: Golden pairs from interactive prompt
                     pairs = interview["golden_pairs"]
-                    queries = [
-                        {"query": p["question"], "description": f"Golden: {p['question'][:50]}"}
-                        for p in pairs
-                    ]
+                    queries = _build_golden_queries(pairs)
                     has_queries = True
                     console.print(f"Using [cyan]{len(queries)}[/] golden Q&A queries")
 
-                if not queries:
+                if not queries and not non_interactive:
                     # Option 2: Interactive query typing
-                    if Confirm.ask("\nEnter test queries interactively?", default=True):
+                    if Confirm.ask("\nEnter test queries interactively? [Y/n]", default=True):
                         query_strings = _prompt_for_queries_interactive()
                         if query_strings:
                             queries = [
@@ -1013,7 +1125,7 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                         tags = ", ".join(q.get("tags", [])) if q.get("tags") else ""
                         console.print(f"  {i}. \"{q['query']}\" [dim]{tags}[/]")
 
-                    if Confirm.ask("\nGenerate more queries?", default=True):
+                    if Confirm.ask("\nGenerate more queries? [Y/n]", default=True):
                         console.print("Generating full test suite...")
                         try:
                             full_queries = _generate_full_queries(
@@ -1272,7 +1384,7 @@ def bootstrap(queries, agent, runner, output, baseline_dir):
             if trace.tool_call_sequence:
                 console.print(f"  Path:       {' → '.join(trace.tool_call_sequence)}")
             
-            if Confirm.ask("Accept this trace as golden?", default=True):
+            if Confirm.ask("Accept this trace as golden? [Y/n]", default=True):
                 # Generates assertions
                 expected_tools = trace.tool_call_sequence
                 max_tool_calls = len(trace.tool_call_sequence) + 1
@@ -1530,7 +1642,7 @@ def record(test_name, suite, output, output_json):
 
         # Prompt user
         from rich.prompt import Confirm
-        if Confirm.ask(f"Save golden trace to [yellow]{save_path}[/]?", default=True):
+        if Confirm.ask(f"Save golden trace to [yellow]{save_path}[/]? [Y/n]", default=True):
             with open(save_path, 'w') as f:
                 f.write(result.trace.model_dump_json(indent=2))
             console.print(f"[green]Saved![/]")
@@ -1692,9 +1804,16 @@ def validate(spec_path):
 
     try:
         spec = load_spec(spec_path)
+        todo_count = sum(1 for q in spec.queries if q.query.strip().upper().startswith("TODO"))
+        real_count = len(spec.queries) - todo_count
         console.print(
             f"[green]✅ Valid:[/] {len(spec.queries)} queries, agent='{spec.agent}'"
         )
+        if todo_count:
+            console.print(
+                f"[yellow]⚠ {todo_count} query(ies) still have TODO placeholders — "
+                f"edit them before running tests[/]"
+            )
         sys.exit(0)
     except (ConfigError, ValidationError) as e:
         console.print(f"[bold red]❌ Validation failed:[/]\n{e}")
@@ -1878,6 +1997,20 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
 
     effective_baseline_dir = baseline_dir or spec.baseline_dir
 
+    # ── Warn about TODO placeholder queries ───────────────────────────────────
+    todo_queries = [q for q in spec.queries if q.query.strip().upper().startswith("TODO")]
+    if todo_queries:
+        console.print(
+            f"[yellow]Warning:[/] {len(todo_queries)} query(ies) still have TODO placeholders — skipping them:"
+        )
+        for tq in todo_queries:
+            console.print(f"  [dim]• {tq.query[:80]}[/]")
+        spec.queries = [q for q in spec.queries if q not in todo_queries]
+        if not spec.queries:
+            console.print("[bold red]Error:[/] All queries are TODO placeholders. Edit agentci_spec.yaml first.")
+            sys.exit(1)
+        console.print()
+
     # ── Mock mode ─────────────────────────────────────────────────────────────
     if mock:
         from .engine.mock_runner import run_mock_spec
@@ -1954,7 +2087,7 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
         console.print(f"\n[dim]{format_estimate(est, len(spec.queries))}[/]")
 
         from rich.prompt import Confirm
-        if not Confirm.ask("Proceed?", default=True):
+        if not Confirm.ask("Proceed? [Y/n]", default=True):
             console.print("[yellow]Aborted.[/]")
             sys.exit(0)
 

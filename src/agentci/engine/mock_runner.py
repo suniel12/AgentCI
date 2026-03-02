@@ -45,11 +45,17 @@ def mock_run(query: str, query_spec: dict) -> Trace:
             )
         )
 
-    # Build expected answer from correctness spec
+    # Build expected answer from correctness spec (AND + OR keywords)
     correctness_spec = query_spec.get("correctness") or {}
     expected_keywords: list[str] = correctness_spec.get("expected_in_answer") or []
-    if expected_keywords:
-        output_text = f"Based on our documentation: {', '.join(expected_keywords)}."
+    any_expected_keywords: list[str] = correctness_spec.get("any_expected_in_answer") or []
+
+    keywords_to_inject = list(expected_keywords)
+    if any_expected_keywords:
+        keywords_to_inject.append(any_expected_keywords[0])
+
+    if keywords_to_inject:
+        output_text = f"Based on our documentation: {', '.join(keywords_to_inject)}."
     else:
         output_text = "[Mock response — no expected keywords defined]"
     span.output_data = output_text

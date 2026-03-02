@@ -41,6 +41,31 @@ class TestMockRun:
         trace = mock_run("What is the weather?", spec)
         assert len(trace.spans[0].tool_calls) == 0
 
+    def test_populates_any_expected_keywords_in_output(self):
+        spec = {"correctness": {"any_expected_in_answer": ["pip", "brew", "conda"]}}
+        trace = mock_run("How do I install?", spec)
+        output = trace.metadata["final_output"]
+        assert any(kw in output for kw in ["pip", "brew", "conda"])
+
+    def test_populates_both_expected_and_any_expected(self):
+        spec = {
+            "correctness": {
+                "expected_in_answer": ["$199", "Business plan"],
+                "any_expected_in_answer": ["monthly", "annual"],
+            }
+        }
+        trace = mock_run("What is the price?", spec)
+        output = trace.metadata["final_output"]
+        # AND keywords must all be present
+        assert "$199" in output
+        assert "Business plan" in output
+        # At least one OR keyword must be present
+        assert any(kw in output for kw in ["monthly", "annual"])
+
+    def test_no_keywords_shows_placeholder(self):
+        trace = mock_run("Hello", {"correctness": {}})
+        assert "Mock response" in trace.metadata["final_output"]
+
 
 class TestRunMockSpec:
     """Tests for run_mock_spec()."""
