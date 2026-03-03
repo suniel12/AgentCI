@@ -98,7 +98,8 @@ def run(query: str) -> Trace:
 """)
         result = runner.invoke(cli, ['eval'])
         assert result.exit_code == 0
-        assert "AgentCI Eval" in result.output
+        assert "AgentCI v" in result.output
+        assert "Eval" in result.output
 
 
 # ── Tests for guided init helpers ─────────────────────────────────────────────

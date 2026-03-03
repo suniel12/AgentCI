@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 Mock runner for AgentCI — generates synthetic traces from spec expectations.
 

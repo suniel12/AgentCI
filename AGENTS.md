@@ -3,6 +3,8 @@
 > Machine-readable reference for coding agents (Claude Code, Cursor, Codex, Copilot).
 > For human-friendly docs, see [README.md](README.md).
 
+**Version**: 0.5.1 | **Package**: `pip install ciagent` | **License**: Apache-2.0
+
 ## Overview
 
 AgentCI is a trace-based regression testing framework for AI agents. It captures LLM calls, tool invocations, routing decisions, and costs, then diffs them against known-good baselines to catch semantic drift before production.
@@ -127,6 +129,7 @@ from agentci.capture import TraceContext
 with TraceContext(agent_name="my_agent", test_name="test_routing") as ctx:
     result = my_agent.run("I need help with billing")
     trace = ctx.trace
+    trace.metadata["final_output"] = str(result)  # Required for answer assertions
 
 # Inspect trace properties
 print(trace.tool_call_sequence)     # ["lookup_account", "check_billing"]
@@ -134,6 +137,8 @@ print(trace.total_cost_usd)         # 0.0023
 print(trace.total_llm_calls)        # 3
 print(trace.total_tool_calls)       # 2
 ```
+
+> **Important:** You must manually set `trace.metadata["final_output"]` for `expected_in_answer`, `not_in_answer`, and `regex_match` assertions to work. Auto-capture is planned for a future release. Without this line, correctness assertions that check the agent's response text will silently pass (no output to check against).
 
 ### Common Assertion Patterns
 

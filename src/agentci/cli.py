@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 Agent CI Command Line Interface.
 
@@ -38,7 +40,11 @@ def _print_error_panel(e):
         text.append(e.fix)
     console.print(Panel(text, title=f"[bold red]{e.__class__.__name__}[/]", border_style="red"))
 
-__version__ = "0.5.1"
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("ciagent")
+except Exception:
+    __version__ = "0.0.0"
 
 
 # ── agentci init --generate helpers ───────────────────────────────────────────
@@ -2016,7 +2022,7 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
         from .engine.mock_runner import run_mock_spec
 
         console.print(
-            f"[bold blue]AgentCI v2[/] │ agent: [cyan]{spec.agent}[/] │ "
+            f"[bold blue]AgentCI v{__version__}[/] │ agent: [cyan]{spec.agent}[/] │ "
             f"queries: [cyan]{len(spec.queries)}[/] │ mode: [cyan]mock[/]"
         )
         console.print("[dim]Running with synthetic traces — zero API cost[/]\n")
@@ -2033,7 +2039,7 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
     # ── Check for runner ──────────────────────────────────────────────────────
     if not spec.runner:
         console.print(
-            f"[bold blue]AgentCI v2[/] spec has [cyan]{len(spec.queries)}[/] "
+            f"[bold blue]AgentCI v{__version__}[/] spec has [cyan]{len(spec.queries)}[/] "
             f"queries for agent '[cyan]{spec.agent}[/]'\n"
         )
         console.print(
@@ -2093,23 +2099,13 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
 
     # ── Run queries in parallel ───────────────────────────────────────────────
     console.print(
-        f"[bold blue]AgentCI v2[/] │ agent: [cyan]{spec.agent}[/] │ "
+        f"[bold blue]AgentCI v{__version__}[/] │ agent: [cyan]{spec.agent}[/] │ "
         f"queries: [cyan]{len(spec.queries)}[/] │ workers: [cyan]{workers}[/]"
     )
     if fmt in ("console", "github"):
         console.print("")
 
-    try:
-        traces = run_spec_parallel(spec, runner_fn, max_workers=workers)
-    except Exception as e:  # noqa: BLE001
-        console.print(f"[bold red]Infrastructure error:[/] {e}")
-        sys.exit(2)
-
-    if not traces:
-        console.print("[bold red]Error:[/] No traces captured — runner may have failed for all queries.")
-        sys.exit(1)
-
-    # ── Load baselines (optional) ─────────────────────────────────────────────
+    # ── Load baselines (optional) — needed before streaming eval ───────────
     baselines: dict = {}
     baseline_path = Path(effective_baseline_dir)
     if baseline_path.exists() and baseline_path.is_dir():
@@ -2125,21 +2121,58 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
             except Exception:  # noqa: BLE001
                 pass  # Skip malformed baseline files
 
-    # ── Evaluate ──────────────────────────────────────────────────────────────
+    # ── Streaming evaluation: print each result as its trace arrives ───────
+    import threading
+    from .engine.runner import evaluate_query
+    from .engine.reporter import emit_query_result, emit_summary
+
+    query_lookup = {q.query: q for q in spec.queries}
+    streaming_results: list = []
+    _print_lock = threading.Lock()
+    stream_console = fmt in ("console", "github")
+
+    def _on_trace(query_text: str, trace):
+        gq = query_lookup.get(query_text)
+        if gq is None:
+            return
+        try:
+            result = evaluate_query(
+                query=gq,
+                trace=trace,
+                baseline_trace=baselines.get(query_text),
+                judge_config=spec.judge_config,
+                spec_dir=str(Path(config).parent) if config else None,
+            )
+            with _print_lock:
+                streaming_results.append(result)
+                if stream_console:
+                    emit_query_result(result)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]Evaluation warning:[/] '{query_text[:40]}': {exc}")
+
     try:
-        results = evaluate_spec(spec, traces, baselines or None)
+        traces = run_spec_parallel(
+            spec, runner_fn, max_workers=workers, on_trace=_on_trace,
+        )
     except Exception as e:  # noqa: BLE001
-        console.print(f"[bold red]Evaluation error:[/] {e}")
-        sys.exit(2)
-    except AgentCIError as e:
-        _print_error_panel(e)
-        sys.exit(2)
-    except Exception as e:  # noqa: BLE001
-        console.print(f"[bold red]Evaluation error:[/] {e}")
+        console.print(f"[bold red]Infrastructure error:[/] {e}")
         sys.exit(2)
 
-    # ── Report ───────────────────────────────────────────────────────────────
-    exit_code = report_results(results, format=fmt, spec_file=config)
+    if not traces:
+        console.print("[bold red]Error:[/] No traces captured — runner may have failed for all queries.")
+        sys.exit(1)
+
+    # ── Report summary / non-console formats ──────────────────────────────
+    results = streaming_results
+    if stream_console:
+        # Individual results already printed; just emit summary + annotations
+        emit_summary(results)
+        if os.environ.get("GITHUB_ACTIONS") == "true" or fmt == "github":
+            from .engine.reporter import _emit_github_annotations
+            _emit_github_annotations(results, config)
+        exit_code = 1 if any(r.hard_fail for r in results) else 0
+    else:
+        exit_code = report_results(results, format=fmt, spec_file=config)
     sys.exit(exit_code)
 
 @cli.command(name="eval")
@@ -2198,7 +2231,7 @@ def eval_cmd(config, tags, fmt, workers, sample_ensemble):
         spec.judge_config["sample_ensemble"] = sample_ensemble
 
     console.print(
-        f"[bold blue]AgentCI Eval[/] │ agent: [cyan]{spec.agent}[/] │ "
+        f"[bold blue]AgentCI v{__version__} Eval[/] │ agent: [cyan]{spec.agent}[/] │ "
         f"queries: [cyan]{len(spec.queries)}[/] │ workers: [cyan]{workers}[/]"
     )
     if fmt in ("console", "github"):
