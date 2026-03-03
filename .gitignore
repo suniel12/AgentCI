@@ -19,6 +19,25 @@ build/
 *.swp
 .DS_Store
 
+# Testing cache
+.pytest_cache/
+
 # Agent CI
 golden/
 test_results/
+
+# Internal planning & development
+Plan_docs/
+phase1.md
+Vision.md
+llms.txt
+demo_ux/
+scripts/
+README_v2.md
+
+# Local config
+agentci.yaml
+agentci_spec.yaml
+
+# Claude context
+.claude/
