@@ -28,9 +28,9 @@ dependencies = [
 ]
 
 [project.urls]
-Documentation = "https://github.com/agentci-org/agentci#readme"
-Repository = "https://github.com/agentci-org/agentci.git"
-Issues = "https://github.com/agentci-org/agentci/issues"
+Documentation = "https://github.com/suniel12/AgentCI#readme"
+Repository = "https://github.com/suniel12/AgentCI.git"
+Issues = "https://github.com/suniel12/AgentCI/issues"
 
 [project.optional-dependencies]
 openai = ["openai>=1.0"]

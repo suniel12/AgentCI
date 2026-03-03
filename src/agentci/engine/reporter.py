@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 AgentCI v2 Reporter.
 
@@ -140,19 +142,25 @@ def _write_step_summary(messages: list[str]) -> None:
 # ── Console Output ─────────────────────────────────────────────────────────────
 
 
-def _emit_console(results: list[QueryResult]) -> None:
-    """Rich console output with three-tier report per query."""
-    for r in results:
-        print(f"\n{'=' * 60}")
-        print(f"Query: {r.query}")
-        _print_layer("CORRECTNESS", r.correctness, fail_icon="❌", pass_icon="✅")
-        _print_layer("PATH", r.path, fail_icon="⚠️", pass_icon="📈", warn_icon="⚠️")
-        _print_layer("COST", r.cost, fail_icon="⚠️", pass_icon="💰", warn_icon="⚠️")
+def emit_query_result(r: QueryResult) -> None:
+    """Print a single query result to console. Used for streaming output."""
+    print(f"\n{'=' * 60}")
+    print(f"Query: {r.query}")
 
-        if r.hard_fail and getattr(r, "trace", None):
-            _print_answer_preview(r.trace)
-            _print_trace_summary(r.trace)
+    # Always show the agent's answer right after the query
+    if getattr(r, "trace", None):
+        _print_answer_preview(r.trace)
 
+    _print_layer("CORRECTNESS", r.correctness, fail_icon="❌", pass_icon="✅")
+    _print_layer("PATH", r.path, fail_icon="⚠️", pass_icon="📈", warn_icon="⚠️")
+    _print_layer("COST", r.cost, fail_icon="⚠️", pass_icon="💰", warn_icon="⚠️")
+
+    if r.hard_fail and getattr(r, "trace", None):
+        _print_trace_summary(r.trace)
+
+
+def emit_summary(results: list[QueryResult]) -> None:
+    """Print the final summary line."""
     total = len(results)
     passed = sum(1 for r in results if not r.hard_fail)
     warned = sum(1 for r in results if r.has_warnings and not r.hard_fail)
@@ -160,28 +168,28 @@ def _emit_console(results: list[QueryResult]) -> None:
     print(f"\n{'=' * 60}")
     print(f"Results: {passed}/{total} passed  |  {warned} warnings  |  {failed} failures")
 
-def _print_answer_preview(trace: Any) -> None:
-    """Show a truncated preview of the extracted answer for failed queries."""
-    answer = ""
-    meta_output = getattr(trace, "metadata", {}).get("final_output")
-    if meta_output is not None:
-        answer = str(meta_output)
-    elif getattr(trace, "spans", None):
-        last_span = trace.spans[-1]
-        output = getattr(last_span, "output_data", None)
-        if output is not None:
-            answer = str(output)
+
+def _emit_console(results: list[QueryResult]) -> None:
+    """Rich console output with three-tier report per query."""
+    for r in results:
+        emit_query_result(r)
+    emit_summary(results)
+
+def _print_answer_preview(trace: Any, max_len: int = 500) -> None:
+    """Show a truncated preview of the extracted answer."""
+    from agentci.engine.runner import _extract_answer
+
+    answer = _extract_answer(trace)
 
     if not answer:
-        print("  [ANSWER] (empty — no answer extracted from trace)")
+        print("Answer: (no answer extracted from trace)")
         return
 
     # Collapse whitespace for compact display
     preview = " ".join(answer.split())
-    max_len = 300
     if len(preview) > max_len:
         preview = preview[:max_len] + "..."
-    print(f"  [ANSWER] {preview}")
+    print(f"Answer: {preview}")
 
 
 def _print_trace_summary(trace: Any) -> None:

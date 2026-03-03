@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 Cost estimator for AgentCI — estimates API cost before running tests.
 

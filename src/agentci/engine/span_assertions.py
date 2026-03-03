@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 Span Assertions Engine — sub-layer of Correctness (Hard Fail).
 

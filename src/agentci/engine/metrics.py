@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 Shared metric computation functions for the AgentCI path evaluation engine.
 

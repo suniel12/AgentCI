@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 Correctness Engine — Layer 1 (Hard Fail).
 

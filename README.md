@@ -1,364 +1,110 @@
 # AgentCI
 
-Trace-based regression testing for AI agents. Catch semantic drift, tool call changes, and cost spikes before production.
+**Pytest-native regression testing for AI agents.** Catch routing changes, tool call drift, and cost spikes before production.
 
-[![Python](https://img.shields.io/pypi/pyversions/agentci)]()
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)]()
-[![CI](https://github.com/agentci-org/agentci/actions/workflows/ci.yml/badge.svg)]()
+[![PyPI](https://img.shields.io/pypi/v/ciagent)](https://pypi.org/project/ciagent/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![AGENTS.md](https://img.shields.io/badge/AGENTS.md-supported-blue)](AGENTS.md)
 
-You swap `gpt-4o-mini` for `gpt-4o`. Your support bot starts routing billing questions to the wrong agent. You change a retrieval prompt. Your RAG pipeline silently skips the vector search step. You don't find out until users complain.
+You changed a prompt. Your agent broke in production. Three days later, a user complained. You had no tests, no diff, no idea what went wrong.
 
-AgentCI records what your agent *actually did* — every tool call, LLM invocation, routing decision, and cost — then diffs it against a known-good baseline. When something drifts, you see exactly what changed.
+Works with OpenAI, Anthropic, and LangGraph. Runs inside pytest.
 
-## See It Work
-
-```bash
-# Run your agent's test suite — all green
-$ pytest tests/ -v
-======================== test session starts =========================
-tests/test_routing.py::test_billing_routes_correctly       PASSED
-tests/test_routing.py::test_refund_flow_tool_sequence      PASSED
-tests/test_routing.py::test_cost_under_budget              PASSED
-tests/test_rag.py::test_retrieval_step_executed            PASSED
-tests/test_rag.py::test_no_hallucination                   PASSED
-==================== 5 passed in 0.8s (mock mode) ====================
-
-# Now change one line — swap the model
--  model = "gpt-4o-mini"
-+  model = "gpt-4o"
-
-# Run again — AgentCI catches the drift
-$ pytest tests/test_regression.py -v
-====================== AgentCI Diff Report =======================
-⚠️  ROUTING_CHANGED  "I can't log in and I'm being charged"
-   baseline → Account Agent
-   current  → Billing Agent
-
-⚠️  COST_SPIKE  "Can I get a refund?"
-   baseline: $0.0004  →  current: $0.0025  (6.2x increase)
-
-✅  TOOLS_IDENTICAL  [lookup_invoice, process_refund]
-✅  OUTPUT_SIMILAR   cosine_similarity=0.94
-
-SUMMARY: 1 routing change, 1 cost spike across 5 test cases
-=================================================================
-```
-
-## Quickstart
+## Add to Your Project
 
 ```bash
 pip install ciagent
-git clone https://github.com/agentci-org/DemoAgents.git
-cd DemoAgents
-make test
 ```
 
-You'll see 90+ tests pass across three demo agents — RAG, DevOps, and customer support routing — in under 2 seconds with zero API keys required.
-
-## What It Catches
-
-| What went wrong | How you'd find out today | How AgentCI catches it |
-|----------------|--------------------------|----------------------|
-| Model swap changes routing decisions | User complaints, days later | `ROUTING_CHANGED` diff with exact before/after agents |
-| Prompt edit silently skips a tool call | Manual testing, maybe | `TOOLS_CHANGED` — "vector_search was called, now it's not" |
-| New model costs 6x more per query | Surprise invoice at month-end | `COST_SPIKE` with threshold alerts and `@assert_budget` |
-| RAG retriever returns irrelevant docs | Hallucinated answers in prod | LLM-as-judge assertions: `assert_llm_judge("answer is relevant")` |
-| Guardrail stops firing after refactor | PII leaks through to specialist agent | `guardrails_triggered` trace assertions |
-| Agent responds instead of routing | Support quality drops silently | `assert_handoff_count(expected=1)` catches the missing handoff |
-
-## Works With Your Stack
-
-AgentCI is framework-agnostic. Same assertions, same diff engine, same CLI — regardless of how you built your agent.
-
-| Framework | Integration | Demo |
-|-----------|------------|------|
-| **OpenAI Agents SDK** | Native `AgentCITraceProcessor` — 2 lines to enable | [Support Router](https://github.com/agentci-org/DemoAgents/tree/main/examples/support-router) — multi-agent handoff with guardrails |
-| **LangGraph / LangChain** | `ctx.attach_langgraph_state()` captures conditional edges and tool calls | [RAG Agent](https://github.com/agentci-org/DemoAgents/tree/main/examples/rag-agent) — retrieval + grading + generation pipeline |
-| **Anthropic (raw)** | `AnthropicMocker` for zero-cost replay; native tool_use capture | [DevAgent](https://github.com/agentci-org/DemoAgents/tree/main/examples/dev-agent) — 8-tool sequential repo analysis |
-| **Any Python agent** | Manual `Trace` / `Span` construction for custom frameworks | See [Core Concepts](#core-concepts) below |
-
-All three demo agents run with **zero API keys** using AgentCI's mock system.
-
-## Core Concepts
-
-### Trace & Assert
-
-Every agent run produces a `Trace` — a structured record of LLM calls, tool invocations, handoffs, and guardrail checks.
-
-```python
-from agentci.models import Trace
-
-trace = run_your_agent("I was charged twice")
-
-# What tools did the agent call?
-assert "lookup_invoice" in trace.tool_call_sequence
-assert "process_refund" in trace.tool_call_sequence
-
-# Did it route correctly?
-handoffs = trace.get_handoffs()
-assert handoffs[0].to_agent == "Billing Agent"
-
-# Did it stay under budget?
-assert trace.total_cost_usd < 0.01
-
-# Did guardrails fire when they should?
-assert "pii_guardrail" not in trace.guardrails_triggered
-```
-
-### Golden Baselines
-
-Record a known-good trace. Diff future runs against it.
-
-```bash
-# Record a baseline
-$ agentci record --test-name "billing_flow" --output golden/
-
-# Later, after a change, diff against it
-$ agentci diff --test-name "billing_flow"
-
-# AgentCI reports:
-#   TOOLS_CHANGED — vector_search was called, now it's not
-#   COST_SPIKE — $0.0004 → $0.0025 (6.2x)
-#   ROUTING_CHANGED — Account Agent → Billing Agent
-```
-
-Or use the pytest-native approach with `assert_golden_match`:
-
-```python
-from agentci.assertions import assert_golden_match
-
-def test_billing_regression():
-    trace = run_your_agent("I was charged twice")
-    assert_golden_match(trace, "golden/billing_flow.json")
-```
-
-### Zero-Cost Testing
-
-Mock LLM responses for deterministic, instant, free test runs.
-
-```python
-from agentci.mocks import OpenAIMocker
-from agents import set_default_openai_client
-
-# Define a scripted sequence of tool calls + final response
-mocker = OpenAIMocker([
-    {"tool": "transfer_to_BillingAgent", "arguments": {}},
-    {"tool": "lookup_invoice", "arguments": {"email": "user@test.com"}},
-    {"text": "I found your invoice. The duplicate charge has been refunded."}
-])
-
-# Inject into the OpenAI Agents SDK — no API key needed
-set_default_openai_client(mocker.client)
-
-trace = run_your_agent("I was charged twice")
-assert trace.tool_call_sequence == ["transfer_to_BillingAgent", "lookup_invoice"]
-```
-
-Works the same for Anthropic:
-
-```python
-from agentci.mocks import AnthropicMocker
-
-mocker = AnthropicMocker([
-    {"tool": "search_knowledge_base", "arguments": {"query": "billing"}},
-    {"text": "Here's what I found about billing..."}
-])
-```
-
-## Try Breaking It
-
-Clone the [DemoAgents](https://github.com/agentci-org/DemoAgents) repo and try these:
-
-**Break 1: Remove a specialist agent.** In `examples/support-router/support_router/agents/triage.py`, remove `account_agent` from the `handoffs` list. Run `pytest tests/test_routing.py`. Watch 6 tests fail with: `ROUTING_CHANGED: Expected 'Account Agent', got 'General Agent'`.
-
-**Break 2: Disable retrieval guardrails.** In `examples/support-router/support_router/agents/triage.py`, remove the `input_guardrails` list. Run `pytest tests/test_guardrails.py`. Watch `test_off_topic_blocked` fail: `Expected guardrail 'relevance_guardrail' to trigger, but no guardrails fired.`
-
-**Break 3: Inject bad context.** In `examples/rag-agent/agent.py`, modify the system prompt to remove the "only answer from context" instruction. Run `pytest tests/test_rag.py`. Watch the LLM-as-judge assertion catch the hallucination: `FAILED — Agent used pre-trained knowledge instead of declining.`
-
-## CLI
-
-```bash
-# ── Setup & Scaffolding ──────────────────────────────────────────────
-agentci init              # Scaffold GitHub Actions + pre-push hooks
-agentci init --generate   # Guided interview: auto-scan project, generate agentci_spec.yaml
-agentci init --generate --mode mock --golden-file qa.json  # Zero-API-key spec generation
-agentci doctor            # Health check: spec, deps, API keys, KB, CI workflow
-agentci validate          # Validate agentci_spec.yaml against schema (no execution)
-agentci bootstrap         # Quick setup from a queries file + runner path
-
-# ── Testing & Evaluation ─────────────────────────────────────────────
-agentci test              # Run 3-layer evaluation (Correctness → Path → Cost)
-agentci test --mock       # Zero-cost synthetic traces — no API keys needed
-agentci test --yes        # Skip cost-estimate confirmation (CI-friendly)
-agentci test --workers 4  # Parallel execution
-agentci eval              # Standalone correctness evaluation (no golden baselines)
-
-# ── Golden Baselines ─────────────────────────────────────────────────
-agentci record            # Record a golden baseline trace from a live run
-agentci save --agent my-agent --version v1 --trace-file trace.json  # Save versioned baseline
-agentci baselines --agent my-agent  # List saved baseline versions
-agentci diff --agent my-agent --baseline v1 --compare v2  # Diff two versions
-
-# ── Reporting ─────────────────────────────────────────────────────────
-agentci run               # Legacy test runner (pytest-compatible)
-agentci report            # Generate HTML report from results JSON
-```
-
-## 3-Layer Evaluation Engine
-
-`agentci test` evaluates every query through three layers:
-
-| Layer | Severity | Purpose | Example |
-|-------|----------|---------|---------|
-| **Correctness** | Hard FAIL (blocks CI) | Answer quality | `expected_in_answer`, `llm_judge`, `not_in_answer`, `regex_match`, `json_schema` |
-| **Path** | Soft WARN (annotation only) | Tool trajectory | `expected_tools`, `min_tool_recall`, `max_loops` |
-| **Cost** | Soft WARN (annotation only) | Efficiency budget | `max_llm_calls`, `max_tokens`, `max_cost_usd` |
-
-Layer 1 failures block CI (exit code 1). Layers 2-3 produce GitHub annotations but let CI pass.
+Write your golden queries — what should your agent handle, and what should it refuse?
 
 ```yaml
-# agentci_spec.yaml — one query with all three layers
+# agentci_spec.yaml
+# runner: any function that takes a query string and returns a response
+runner: my_app.agent:run_for_agentci
 queries:
   - query: "How do I install AgentCI?"
     correctness:
       any_expected_in_answer: ["pip install", "ciagent"]
-      llm_judge:
-        - rule: "Response provides clear installation instructions"
-          threshold: 0.7
     path:
       expected_tools: [retrieve_docs]
-      min_tool_recall: 1.0
     cost:
       max_llm_calls: 8
+
+  - query: "What's the CEO's favorite restaurant?"
+    correctness:
+      not_in_answer: ["restaurant", "favorite"]
+    path:
+      expected_tools: []  # expect no tools called for out-of-scope queries
 ```
 
-## Mock Mode
-
-Test your spec structure with zero API keys and zero cost:
+Run:
 
 ```bash
-agentci test --mock
+agentci test --mock       # start here: zero-cost with synthetic traces
+agentci test              # run live against your real agent
 ```
 
-Mock mode generates synthetic traces that match your spec expectations. Use it to:
-- Validate spec structure before spending on live runs
-- Run in CI without API keys for fast feedback
-- Iterate on assertions without waiting for LLM responses
+`agentci test` evaluates each query through 3 layers — correctness, path, and cost:
 
-## Cost Estimation
+```
+============================================================
 
-Before live test runs, AgentCI shows a cost estimate:
+Query: How do I install AgentCI?
+Answer: To install AgentCI, you can use pip with the following command:
+        pip install ciagent. Make sure you have Python 3.10 or later.
+
+  ✅  CORRECTNESS: PASS
+       ✓ Found keywords: "pip install ciagent"
+       ✓ LLM judge passed (score: 5 ≥ 0.6)
+  📈  PATH: PASS
+       ✓ Tool recall: 1.000 (expected: [retrieve_docs])
+       ✓ Tool precision: 0.500
+       ✓ No loops detected
+  💰  COST: PASS
+       ✓ LLM calls: 8 ≤ max 8
+
+============================================================
+
+Query: What Python version does AgentCI require and what frameworks does it support?
+Answer: AgentCI currently does not specify a required Python version
+        in the provided context, so I don't have that information...
+
+  ❌  CORRECTNESS: FAIL
+       • Expected '3.10' not found in answer
+  📈  PATH: PASS
+       ✓ Tool recall: 1.000 (expected: [retrieve_docs])
+       ✓ Loops: 1 ≤ max 3
+  💰  COST: PASS
+       ✓ LLM calls: 4 ≤ max 5
+
+============================================================
+```
+
+Don't have golden queries yet? `agentci init --generate` scans your code and generates a starter spec.
+
+## Demo
+
+Here's a RAG agent demo where someone "optimizes for latency" by reducing retriever docs from 8 to 1. AgentCI catches the correctness regression:
+
+![AgentCI Demo](demo/agentci-rag-demo.gif)
+
+## CLI
 
 ```bash
-$ agentci test
-Estimated cost: $0.12 – $0.35 (12 queries)
-Proceed? [y/N] y
+agentci init --generate        # Scan project, generate test spec
+agentci init                   # Generate GitHub Actions workflow + pre-push hook
+agentci test --mock --yes      # Zero-cost synthetic traces, CI-friendly (no keys, no prompts)
+agentci test                   # Run 3-layer evaluation (correctness → path → cost)
+agentci doctor                 # Health check: spec, deps, API keys
+agentci record <test>          # Record golden baseline
+agentci diff                   # Diff against baseline
 ```
-
-Skip the prompt in CI with `--yes` or `-y`:
-
-```bash
-agentci test --yes  # no confirmation prompt
-```
-
-## CI/CD
-
-```bash
-agentci init
-```
-
-Generates a GitHub Actions workflow and optional pre-push git hook. Every push runs your agent tests and diffs against golden baselines.
-
-```yaml
-# .github/workflows/agentci.yml (auto-generated)
-name: AgentCI
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-      - run: pip install -e ".[all]"
-      - run: pytest tests/ -v
-      - run: agentci diff --baseline golden/
-```
-
-## For Coding Agents
-
-If you're a coding agent (Claude Code, Cursor, Codex, Copilot) integrating AgentCI into a project, see [`AGENTS.md`](AGENTS.md) for structured setup instructions, import patterns, and the full assertion API reference.
-
-Quick setup for any agent project:
-1. `pip install ciagent`
-2. Copy the test template from AGENTS.md
-3. Run `agentci init` to generate CI config
-4. Run `agentci run` to execute tests
-
-## Assertions
-
-| Assertion | What it checks |
-|-----------|---------------|
-| `trace.tool_call_sequence` | Ordered list of tool names invoked during the run |
-| `trace.total_cost_usd` | Total LLM cost in USD |
-| `trace.get_handoffs()` | List of agent-to-agent routing decisions |
-| `trace.guardrails_triggered` | Which safety guardrails fired |
-| `trace.agents_involved` | Ordered list of agent names that executed |
-| `assert_golden_match(trace, path)` | Diff against a saved golden baseline |
-| `evaluate_assertion(type="llm_judge")` | LLM-as-judge evaluation of output quality |
-| `evaluate_assertion(type="handoff_target")` | Verify routing destination |
-| `evaluate_assertion(type="handoff_count")` | Verify number of handoffs |
-| `@assert_budget(max_cost=0.10)` | Decorator: fail if run exceeds cost limit |
-| `evaluate_assertion(type="tool_called")` | Verify a specific tool was invoked |
-| `evaluate_assertion(type="output_contains")` | Check output includes expected content |
-| `evaluate_assertion(type="cost_under")` | Check total cost below threshold |
-
-## Diff Report Types
-
-When you diff a current run against a golden baseline, AgentCI flags these change categories:
-
-| Diff Type | Meaning |
-|-----------|---------|
-| `TOOLS_CHANGED` | Different tools were called vs. baseline |
-| `ARGS_CHANGED` | Same tools, but arguments changed |
-| `SEQUENCE_CHANGED` | Tools called in a different order |
-| `COST_SPIKE` | Cost increased beyond threshold |
-| `LATENCY_SPIKE` | Duration increased beyond threshold |
-| `STOP_REASON_CHANGED` | LLM stopped for a different reason |
-| `ROUTING_CHANGED` | Agent handoff went to a different target |
-| `GUARDRAILS_CHANGED` | Different guardrails fired vs. baseline |
-| `OUTPUT_CHANGED` | Final output semantically different |
-| `AVAILABLE_HANDOFFS_CHANGED` | Set of reachable agents changed |
-
-## Status
-
-AgentCI is in **beta** (v0.5.0). The core trace model, diffing engine, 3-layer evaluation engine, mock system, and CLI are stable. The API may evolve based on community feedback.
-
-**What's here today:**
-- 3-layer evaluation engine (Correctness / Path / Cost)
-- Trace capture for LangGraph, Anthropic, and OpenAI Agents SDK
-- Golden baseline recording, versioned saves, and regression diffing
-- LLM mocking for all three frameworks (zero API keys)
-- LLM-as-judge with composite rubrics, ensemble judging, and doc-grounded evaluation
-- Mock mode (`agentci test --mock`) for zero-cost spec validation
-- Guided spec generation (`agentci init --generate`) with auto-scan and KB sampling
-- Health check (`agentci doctor`) for environment validation
-- Cost estimation before live runs
-- Pytest plugin for native integration
-- GitHub Actions generator via `agentci init`
-
-**What's next:**
-- Dashboard UI for trace visualization
-- Trace export (OpenTelemetry format)
-- More framework adapters (CrewAI, AutoGen)
-- MCP server for native coding agent integration
-- Agent Skills distribution for auto-discovery
-- Hosted regression tracking
-
 ## Contributing
 
-AgentCI is open source under the Apache 2.0 License. Issues, PRs, and feedback welcome.
+[GitHub Issues](https://github.com/suniel12/AgentCI/issues)
+[DemoAgents](https://github.com/suniel12/DemoAgents) — working examples for all three frameworks
 
-If you build an agent and test it with AgentCI, I'd love to hear about it — open an issue or reach out.
+Apache 2.0. If you build an agent and test it with AgentCI, I'd love to hear about it.
+
+---
