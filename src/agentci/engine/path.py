@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 Path Engine — Layer 2 (Soft Warning).
 
@@ -123,7 +125,23 @@ def evaluate_path(
     else:
         pass_messages.append(f"Loops: {loops} ≤ max {spec.max_loops}")
 
-    # ── 7. match mode (vs baseline) ──────────────────────────────────────────
+    # ── 7. expected_tool_sequence (strict ordered check) ─────────────────────
+    if spec.expected_tool_sequence is not None:
+        expected_seq = spec.expected_tool_sequence
+        details["expected_tool_sequence"] = {
+            "expected": expected_seq,
+            "actual": used_tools,
+            "matched": expected_seq == used_tools,
+        }
+        if expected_seq == used_tools:
+            pass_messages.append(f"Tool sequence matched: {expected_seq}")
+        else:
+            diff_msg = _format_sequence_diff(expected_seq, used_tools)
+            warnings.append(
+                f"Tool sequence mismatch: expected {expected_seq}, got {used_tools}. {diff_msg}"
+            )
+
+    # ── 8. match mode (vs baseline) ──────────────────────────────────────────
     if baseline_trace is not None:
         baseline_tools = baseline_trace.tool_call_sequence
         match_result = _evaluate_match_mode(used_tools, baseline_tools, spec.match_mode)
@@ -133,7 +151,7 @@ def evaluate_path(
                 f"Match mode '{spec.match_mode.value}' failed: {match_result['reason']}"
             )
 
-    # ── 8. handoff assertions ────────────────────────────────────────────────
+    # ── 9. handoff assertions ────────────────────────────────────────────────
     if spec.expected_handoff or spec.expected_handoffs_available or spec.max_handoff_count is not None:
         handoffs = trace.get_handoffs()
         actual_targets = [h.to_agent for h in handoffs if h.to_agent]
@@ -224,3 +242,15 @@ def _evaluate_match_mode(
         reason = f"Unknown match mode: {mode}"
 
     return {"matched": matched, "reason": reason}
+
+
+def _format_sequence_diff(expected: list[str], actual: list[str]) -> str:
+    """Format a human-readable diff of tool sequences."""
+    if len(expected) != len(actual):
+        return f"Length mismatch: expected {len(expected)} calls, got {len(actual)}"
+
+    for i, (exp, act) in enumerate(zip(expected, actual)):
+        if exp != act:
+            return f"First mismatch at position {i}: expected '{exp}', got '{act}'"
+
+    return ""

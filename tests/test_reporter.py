@@ -54,6 +54,29 @@ def make_result(
     )
 
 
+class _MockTrace:
+    """Minimal trace stub for testing answer extraction."""
+    def __init__(self, final_output: str = ""):
+        self.metadata = {"final_output": final_output} if final_output else {}
+        self.spans = []
+
+
+def make_result_with_trace(
+    query: str = "Test query",
+    answer: str = "This is the answer",
+    correctness: LayerResult | None = None,
+    path: LayerResult | None = None,
+    cost: LayerResult | None = None,
+) -> QueryResult:
+    return QueryResult(
+        query=query,
+        correctness=correctness or pass_layer(),
+        path=path or skip_layer(),
+        cost=cost or skip_layer(),
+        trace=_MockTrace(final_output=answer),
+    )
+
+
 # ── Exit Codes ────────────────────────────────────────────────────────────────
 
 
@@ -361,3 +384,131 @@ class TestPrometheusOutput:
         assert "agentci_cost_usd" in out
         assert "agentci_latency_ms" in out
         assert "agentci_total_tokens" in out
+
+
+# ── Answer Preview ────────────────────────────────────────────────────────────
+
+
+class TestAnswerPreview:
+    """Tests for always-show answer display in console output."""
+
+    def test_answer_shown_on_passing_query(self, capsys):
+        with patch.dict("os.environ", {}, clear=True):
+            results = [make_result_with_trace(
+                query="How do I install?",
+                answer="Use pip install ciagent",
+            )]
+            report_results(results)
+        out = capsys.readouterr().out
+        assert "Answer:" in out
+        assert "Use pip install ciagent" in out
+
+    def test_answer_shown_on_failing_query(self, capsys):
+        with patch.dict("os.environ", {}, clear=True):
+            results = [make_result_with_trace(
+                query="How do I install?",
+                answer="Some wrong answer",
+                correctness=fail_layer(),
+            )]
+            report_results(results)
+        out = capsys.readouterr().out
+        assert "Answer:" in out
+        assert "Some wrong answer" in out
+
+    def test_answer_truncated_at_500_chars(self, capsys):
+        with patch.dict("os.environ", {}, clear=True):
+            long_answer = "x" * 600
+            results = [make_result_with_trace(answer=long_answer)]
+            report_results(results)
+        out = capsys.readouterr().out
+        answer_line = [l for l in out.splitlines() if "Answer:" in l][0]
+        assert answer_line.endswith("...")
+        # Should contain exactly 500 x's + "..."
+        assert "x" * 500 in answer_line
+        assert "x" * 501 not in answer_line
+
+    def test_no_answer_when_no_trace(self, capsys):
+        with patch.dict("os.environ", {}, clear=True):
+            results = [make_result(query="No trace query")]
+            report_results(results)
+        out = capsys.readouterr().out
+        assert "Answer:" not in out
+
+    def test_empty_answer_shows_placeholder(self, capsys):
+        with patch.dict("os.environ", {}, clear=True):
+            results = [make_result_with_trace(answer="")]
+            report_results(results)
+        out = capsys.readouterr().out
+        assert "no answer extracted" in out
+
+    def test_answer_appears_before_correctness(self, capsys):
+        with patch.dict("os.environ", {}, clear=True):
+            results = [make_result_with_trace(
+                query="Test query",
+                answer="The answer text",
+            )]
+            report_results(results)
+        out = capsys.readouterr().out
+        answer_pos = out.index("Answer:")
+        correctness_pos = out.index("CORRECTNESS")
+        assert answer_pos < correctness_pos
+
+
+# ── HTML Output ───────────────────────────────────────────────────────────────
+
+
+class TestHTMLOutput:
+    """Tests for HTML report generation."""
+
+    def test_html_file_created(self, tmp_path, capsys):
+        """HTML format creates a file at the specified output path."""
+        output = tmp_path / "report.html"
+        results = [make_result(query="How do I install?")]
+        with patch.dict("os.environ", {}, clear=True):
+            report_results(results, format="html", output_path=str(output))
+        assert output.exists()
+        content = output.read_text()
+        assert "<!DOCTYPE html>" in content
+        assert "AgentCI" in content
+
+    def test_html_summary_stats(self, tmp_path, capsys):
+        """HTML report contains correct summary statistics."""
+        output = tmp_path / "report.html"
+        results = [
+            make_result(query="Q1"),
+            make_result(query="Q2", correctness=fail_layer()),
+            make_result(query="Q3", path=warn_layer()),
+        ]
+        with patch.dict("os.environ", {}, clear=True):
+            report_results(results, format="html", output_path=str(output))
+        content = output.read_text()
+        # 2 passed (Q1 + Q3), 1 failed (Q2), 1 warning (Q3)
+        assert ">2<" in content  # passed count
+        assert ">1<" in content  # failed count and warned count
+        assert ">3<" in content  # total
+
+    def test_html_query_cards(self, tmp_path, capsys):
+        """HTML report contains per-query cards with query text."""
+        output = tmp_path / "report.html"
+        results = [
+            make_result(query="How do I install AgentCI?"),
+            make_result(query="What is RAG?", correctness=fail_layer("Missing keyword")),
+        ]
+        with patch.dict("os.environ", {}, clear=True):
+            report_results(results, format="html", output_path=str(output))
+        content = output.read_text()
+        assert "How do I install AgentCI?" in content
+        assert "What is RAG?" in content
+        assert "FAIL" in content
+        assert "Missing keyword" in content
+
+    def test_html_default_output_path(self, capsys, monkeypatch):
+        """Default output path is agentci-report.html in current directory."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            monkeypatch.chdir(tmpdir)
+            results = [make_result()]
+            with patch.dict("os.environ", {}, clear=True):
+                report_results(results, format="html")
+            from pathlib import Path
+            assert (Path(tmpdir) / "agentci-report.html").exists()

@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 AgentCI v2 Parallel Execution Engine.
 
@@ -52,6 +54,7 @@ def run_spec_parallel(
     retry_count: int = 2,
     retry_backoff: float = 1.0,
     query_indices: Optional[list[int]] = None,
+    on_trace: Optional[Callable[[str, "Trace"], None]] = None,
 ) -> dict[str, "Trace"]:
     """Execute spec queries in parallel with retry and exponential backoff.
 
@@ -62,6 +65,7 @@ def run_spec_parallel(
         retry_count:    Max retries per query on transient infra errors.
         retry_backoff:  Base backoff seconds; doubles each retry (1s, 2s, 4s...).
         query_indices:  Optional subset of spec.queries to run (0-based).
+        on_trace:       Optional callback(query_text, trace) called as each query completes.
 
     Returns:
         dict mapping query_text → Trace. Queries that fail after all retries
@@ -91,6 +95,8 @@ def run_spec_parallel(
                 trace = fut.result()
                 if trace is not None:
                     results[query_text] = trace
+                    if on_trace is not None:
+                        on_trace(query_text, trace)
                 else:
                     logger.error("[AgentCI] Runner returned None for query: %s", query_text[:60])
             except Exception as exc:
@@ -194,6 +200,15 @@ def resolve_runner(runner_path: str) -> Callable[[str], "Trace"]:
 # ── Internal helpers ────────────────────────────────────────────────────────────
 
 
+def _wrap_str_as_trace(result: str, query: str) -> "Trace":
+    """Wrap a plain string return into a minimal Trace object."""
+    from agentci.models import Trace
+
+    trace = Trace(test_name=query, agent_name="unknown")
+    trace.metadata["final_output"] = result
+    return trace
+
+
 def _run_with_retry(
     runner_fn: Callable[[str], "Trace"],
     query: str,
@@ -205,7 +220,15 @@ def _run_with_retry(
 
     for attempt in range(retry_count + 1):
         try:
-            return runner_fn(query)
+            result = runner_fn(query)
+            # Auto-wrap string returns into Trace for convenience
+            if isinstance(result, str):
+                logger.info(
+                    "[AgentCI] Runner returned str instead of Trace for '%s' — auto-wrapping.",
+                    query[:40],
+                )
+                return _wrap_str_as_trace(result, query)
+            return result
         except _RETRYABLE_EXCEPTIONS as exc:
             last_exc = exc
             if attempt < retry_count:

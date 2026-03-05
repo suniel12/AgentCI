@@ -1,9 +1,12 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 Lightweight mock tools for zero-API-key testing.
 
 Developers define mock responses in YAML or Python.
 The demo agent ships with these pre-configured.
 """
+from __future__ import annotations
 
 from typing import Any, Callable
 from .models import ToolCall

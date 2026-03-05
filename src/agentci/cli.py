@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 Agent CI Command Line Interface.
 
@@ -38,7 +40,11 @@ def _print_error_panel(e):
         text.append(e.fix)
     console.print(Panel(text, title=f"[bold red]{e.__class__.__name__}[/]", border_style="red"))
 
-__version__ = "0.5.0"
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("ciagent")
+except Exception:
+    __version__ = "0.0.0"
 
 
 # ── agentci init --generate helpers ───────────────────────────────────────────
@@ -226,9 +232,14 @@ def _detect_tools_from_code(project_dir) -> list[str]:
             continue
         # @tool decorated functions
         tools.extend(tool_pattern.findall(content))
-        # bind_tools([tool1, tool2])
+        # bind_tools([tool1, tool2]) or bind_tools([{"name": "...", ...}])
         for match in bind_pattern.findall(content):
-            tools.extend(name.strip().strip("'\"") for name in match.split(","))
+            if "{" in match:
+                # Dict-style tool schemas — extract "name" values
+                name_pattern = re.compile(r'"name"\s*:\s*"([^"]+)"')
+                tools.extend(name_pattern.findall(match))
+            else:
+                tools.extend(name.strip().strip("'\"") for name in match.split(","))
 
     # Deduplicate, preserve order
     seen: set[str] = set()
@@ -285,6 +296,56 @@ def _load_golden_pairs(path: str) -> list[dict]:
         return pairs
 
     return []
+
+
+_STOPWORDS = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "need", "must", "that",
+    "this", "these", "those", "with", "from", "into", "about", "for",
+    "and", "but", "not", "you", "your", "our", "their", "its", "also",
+    "just", "only", "very", "more", "most", "some", "any", "each",
+    "which", "who", "whom", "what", "when", "where", "how", "than",
+    "then", "there", "here", "other", "such", "like", "well", "back",
+})
+
+
+def _extract_keywords_from_answer(answer: str, max_keywords: int = 5) -> list[str]:
+    """Extract distinctive keywords from a golden-file answer.
+
+    Returns up to *max_keywords* words (>3 chars, not stopwords) that can
+    serve as ``any_expected_in_answer`` assertions.  Users are expected to
+    refine these after generation.
+    """
+    import re
+    words = re.findall(r"[A-Za-z0-9_.$/-]{4,}", answer)
+    seen: set[str] = set()
+    keywords: list[str] = []
+    for w in words:
+        low = w.lower()
+        if low in _STOPWORDS or low in seen:
+            continue
+        seen.add(low)
+        keywords.append(w)
+        if len(keywords) >= max_keywords:
+            break
+    return keywords
+
+
+def _build_golden_queries(pairs: list[dict]) -> list[dict]:
+    """Convert golden Q&A pairs into query dicts with keyword assertions."""
+    queries: list[dict] = []
+    for p in pairs:
+        query_dict: dict = {
+            "query": p["question"],
+            "description": f"Golden: {p['question'][:50]}",
+        }
+        if p.get("answer"):
+            keywords = _extract_keywords_from_answer(p["answer"])
+            if keywords:
+                query_dict["correctness"] = {"any_expected_in_answer": keywords}
+        queries.append(query_dict)
+    return queries
 
 
 _RUNNER_FN_NAMES = {"run_for_agentci", "run_agent", "run_for_agent", "run"}
@@ -372,7 +433,7 @@ def _generate_skeleton_spec(
     correctness:
       any_expected_in_answer: ["TODO: keyword1", "TODO: keyword2"]
     cost:
-      max_llm_calls: 8
+      max_llm_calls: 10
 
   - query: "What is the weather today?"
     description: "Out-of-scope question — agent should decline"
@@ -394,7 +455,7 @@ def _generate_skeleton_spec(
     path:
       expected_tools: [{tool}]
     cost:
-      max_llm_calls: 8
+      max_llm_calls: 10
 """
         queries_yaml += """
   - query: "What is the weather today?"
@@ -408,9 +469,15 @@ def _generate_skeleton_spec(
         queries_yaml += """
   - query: "TODO: Replace with a topic your agent handles"
     description: "In-scope conversational test"
+    correctness:
+      any_expected_in_answer: ["TODO: keyword1", "TODO: keyword2"]
+    cost:
+      max_llm_calls: 10
 
   - query: "TODO: Replace with a topic your agent should decline"
     description: "Out-of-scope — agent should refuse"
+    cost:
+      max_llm_calls: 2
 """
 
     return f"""agent: my-agent
@@ -559,8 +626,10 @@ For each query, produce a YAML block with:
 - tags: list of tags (smoke, in-scope, out-of-scope, edge-case, etc.)
 - path: expected_tools list OR max_tool_calls: 0 for decline cases
 - correctness: use any_expected_in_answer (OR logic) for list-type answers,
-  expected_in_answer (AND logic) only when ALL terms are essential, or llm_judge rule
-- cost: max_llm_calls budget (default 8 for in-scope queries)
+  expected_in_answer (AND logic) only when ALL terms are essential, or llm_judge rule.
+  For judge rules on in-scope queries, include context_file pointing to the KB file
+  that contains the answer so the judge can verify against the actual documentation.
+- cost: max_llm_calls budget (default 10 for in-scope queries)
 
 JUDGE RULE GUIDELINES:
 Write judge rules that evaluate whether the response is HELPFUL and ACCURATE,
@@ -600,7 +669,7 @@ not an exam candidate.
      agent paraphrasing and partial answers.
 
 5. COST BUDGET:
-   Set max_llm_calls to 8 for in-scope queries (RAG agents typically use 4-8
+   Set max_llm_calls to 10 for in-scope queries (RAG agents typically use 4-10
    LLM calls per query). Use 2-3 for out-of-scope/greeting queries.
 
 EXAMPLES OF GOOD vs BAD JUDGE RULES:
@@ -628,11 +697,34 @@ GOOD (evaluates helpfulness):
         any AgentCI facts unprompted."
   threshold: 0.7
 
+6. DOC-GROUNDED JUDGING (context_file):
+   For in-scope queries where the agent retrieves from a KB, ALWAYS include
+   context_file pointing to the KB file that contains the answer. This lets
+   the judge verify the answer against the actual document instead of guessing.
+   The file paths are listed in the KNOWLEDGE BASE CONTENT section above.
+
+   Example:
+     llm_judge:
+       - rule: "The answer should accurately describe the feature based on
+               retrieved documentation."
+         threshold: 0.7
+         context_file: knowledge_base/features.md
+
+   Do NOT use context_file for out-of-scope or greeting queries (no KB to check).
+   Pick the MOST RELEVANT KB file for each query — the one most likely to
+   contain the answer.
+
 Respond ONLY with valid YAML (a list of query objects, no surrounding text).
 """
 
     if os.environ.get("ANTHROPIC_API_KEY"):
-        import anthropic as _anthropic
+        try:
+            import anthropic as _anthropic
+        except ImportError:
+            raise ImportError(
+                "anthropic package required for AI generation. "
+                "Install it with: pip install ciagent[anthropic]"
+            )
         client = _anthropic.Anthropic()
         message = client.messages.create(
             model="claude-sonnet-4-6",
@@ -641,7 +733,13 @@ Respond ONLY with valid YAML (a list of query objects, no surrounding text).
         )
         raw = message.content[0].text.strip()
     else:
-        import openai as _openai
+        try:
+            import openai as _openai
+        except ImportError:
+            raise ImportError(
+                "openai package required for AI generation. "
+                "Install it with: pip install ciagent[openai]"
+            )
         client = _openai.OpenAI()
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -769,13 +867,17 @@ def _calibrate_spec_from_traces(
 @click.version_option(version=__version__, prog_name="agentci")
 def cli():
     """Agent CI — Continuous Integration for AI Agents"""
+    # Suppress noisy Python warnings (Pydantic serializer, deprecations, etc.)
+    import warnings
+    warnings.filterwarnings("ignore")
+
     # Load .env variables
     try:
         from dotenv import load_dotenv
         load_dotenv()
     except ImportError:
         pass
-    
+
     # Ensure current directory is in sys.path so we can import agents
     import sys
     import os
@@ -799,7 +901,9 @@ def cli():
               help='Test run mode: live (real API) or mock (synthetic traces)')
 @click.option('--golden-file', default=None, type=click.Path(exists=True),
               help='Path to golden Q&A pairs (JSON/CSV) for mock mode')
-def init(hook, force, example, generate, agent_description, kb_path, run_mode, golden_file):
+@click.option('--runner', default=None,
+              help='Runner import path (e.g. myagent.run:run_agent). Skips prompt.')
+def init(hook, force, example, generate, agent_description, kb_path, run_mode, golden_file, runner):
     """Scaffold a new AgentCI test suite and CI/CD pipeline."""
     import jinja2
     from rich.prompt import Prompt
@@ -810,6 +914,9 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
             "[yellow]Warning:[/] --agent-description is deprecated. "
             "Agent type is now auto-detected from code."
         )
+
+    # Non-interactive when --mode is provided (signals CI/pipeline usage)
+    non_interactive = run_mode is not None
 
     # Track whether we generated real queries vs skeleton
     has_queries = True
@@ -879,6 +986,8 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                 # Confirm KB path
                 if kb_path:
                     interview["kb_path"] = kb_path
+                elif detected_kb and non_interactive:
+                    interview["kb_path"] = detected_kb
                 elif detected_kb:
                     from pathlib import Path as _P
                     kb_file_count = len([f for f in _P(detected_kb).rglob("*") if f.suffix.lower() in {".md", ".txt"}])
@@ -891,6 +1000,9 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                     # Re-scan if user changed path
                     if confirmed_kb != detected_kb:
                         context = _scan_project(Path("."), kb_override=confirmed_kb)
+                elif non_interactive:
+                    interview["kb_path"] = "./knowledge_base"
+                    context = _scan_project(Path("."), kb_override=interview["kb_path"])
                 else:
                     interview["kb_path"] = Prompt.ask(
                         "\n[bold]Q2.[/] Where is your knowledge base directory?",
@@ -903,7 +1015,7 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                     interview["golden_pairs"] = _load_golden_pairs(golden_file)
                     if interview["golden_pairs"]:
                         console.print(f"Loaded [cyan]{len(interview['golden_pairs'])}[/] golden pairs from file")
-                else:
+                elif not non_interactive:
                     golden_path = Prompt.ask(
                         "\n    Golden Q&A pairs? (JSON/CSV path, or Enter to skip)",
                         default="",
@@ -912,22 +1024,27 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                         interview["golden_pairs"] = _load_golden_pairs(golden_path)
 
             elif agent_type == "tool":
-                if detected_tools:
+                if non_interactive:
+                    if detected_tools:
+                        interview["tools"] = detected_tools
+                elif detected_tools:
                     tools_str = Prompt.ask(
                         f"\n[bold]Q2.[/] Confirm detected tools\n"
                         f"    [dim]{', '.join(detected_tools)}[/]\n"
                         f"    [dim](Enter to confirm, or type comma-separated list)[/]",
                         default=", ".join(detected_tools),
                     )
+                    if tools_str:
+                        interview["tools"] = [t.strip() for t in tools_str.split(",") if t.strip()]
                 else:
                     tools_str = Prompt.ask(
                         "\n[bold]Q2.[/] What tools does your agent use? (comma-separated)",
                         default="",
                     )
-                if tools_str:
-                    interview["tools"] = [t.strip() for t in tools_str.split(",") if t.strip()]
+                    if tools_str:
+                        interview["tools"] = [t.strip() for t in tools_str.split(",") if t.strip()]
 
-            else:  # conversational
+            elif not non_interactive:  # conversational — skip in non-interactive
                 handle = Prompt.ask(
                     "\n[bold]Q2a.[/] Topics to handle? (comma-separated, optional)",
                     default="",
@@ -944,12 +1061,19 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
             # ── Step 5: Runner detection ─────────────────────────────
             detected_runner = _detect_runner(Path("."))
             runner_default = detected_runner or "myagent.run:run_agent"
-            if detected_runner:
-                console.print(f"\nDetected runner: [cyan]{detected_runner}[/]")
-            runner_path = Prompt.ask(
-                "Runner import path",
-                default=runner_default,
-            )
+            if runner:
+                runner_path = runner
+            elif non_interactive:
+                runner_path = runner_default
+                if detected_runner:
+                    console.print(f"Auto-detected runner: [cyan]{detected_runner}[/]")
+            else:
+                if detected_runner:
+                    console.print(f"\nDetected runner: [cyan]{detected_runner}[/]")
+                runner_path = Prompt.ask(
+                    "Runner import path",
+                    default=runner_default,
+                )
 
             # ── Step 6: Query generation (branched by mode) ──────────
             queries = None
@@ -962,25 +1086,19 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                     # Option 1: Golden file provided via flag
                     pairs = _load_golden_pairs(golden_file)
                     if pairs:
-                        queries = [
-                            {"query": p["question"], "description": f"Golden: {p['question'][:50]}"}
-                            for p in pairs
-                        ]
+                        queries = _build_golden_queries(pairs)
                         has_queries = True
                         console.print(f"Using [cyan]{len(queries)}[/] queries from golden file")
                 elif interview.get("golden_pairs"):
                     # Option 1b: Golden pairs from interactive prompt
                     pairs = interview["golden_pairs"]
-                    queries = [
-                        {"query": p["question"], "description": f"Golden: {p['question'][:50]}"}
-                        for p in pairs
-                    ]
+                    queries = _build_golden_queries(pairs)
                     has_queries = True
                     console.print(f"Using [cyan]{len(queries)}[/] golden Q&A queries")
 
-                if not queries:
+                if not queries and not non_interactive:
                     # Option 2: Interactive query typing
-                    if Confirm.ask("\nEnter test queries interactively?", default=True):
+                    if Confirm.ask("\nEnter test queries interactively? [Y/n]", default=True):
                         query_strings = _prompt_for_queries_interactive()
                         if query_strings:
                             queries = [
@@ -1013,7 +1131,7 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                         tags = ", ".join(q.get("tags", [])) if q.get("tags") else ""
                         console.print(f"  {i}. \"{q['query']}\" [dim]{tags}[/]")
 
-                    if Confirm.ask("\nGenerate more queries?", default=True):
+                    if Confirm.ask("\nGenerate more queries? [Y/n]", default=True):
                         console.print("Generating full test suite...")
                         try:
                             full_queries = _generate_full_queries(
@@ -1272,7 +1390,7 @@ def bootstrap(queries, agent, runner, output, baseline_dir):
             if trace.tool_call_sequence:
                 console.print(f"  Path:       {' → '.join(trace.tool_call_sequence)}")
             
-            if Confirm.ask("Accept this trace as golden?", default=True):
+            if Confirm.ask("Accept this trace as golden? [Y/n]", default=True):
                 # Generates assertions
                 expected_tools = trace.tool_call_sequence
                 max_tool_calls = len(trace.tool_call_sequence) + 1
@@ -1530,7 +1648,7 @@ def record(test_name, suite, output, output_json):
 
         # Prompt user
         from rich.prompt import Confirm
-        if Confirm.ask(f"Save golden trace to [yellow]{save_path}[/]?", default=True):
+        if Confirm.ask(f"Save golden trace to [yellow]{save_path}[/]? [Y/n]", default=True):
             with open(save_path, 'w') as f:
                 f.write(result.trace.model_dump_json(indent=2))
             console.print(f"[green]Saved![/]")
@@ -1669,11 +1787,200 @@ def diff_cmd(baseline, compare, agent, spec_path, baseline_dir, fmt, query_filte
 
 
 @cli.command()
-@click.option('--input', '-i', type=click.Path(exists=True), required=True)
-@click.option('--output', '-o', type=click.Path(), required=True)
-def report(input, output):
-    """Generate an HTML report from a JSON results file."""
-    pass
+@click.option('--input', '-i', 'input_path', type=click.Path(exists=True), required=True,
+              help='Path to a JSON results file (from --format json)')
+@click.option('--output', '-o', 'output_path', type=click.Path(), default='agentci-report.html',
+              show_default=True, help='Output HTML file path')
+def report(input_path, output_path):
+    """Generate an HTML report from a JSON results file.
+
+    Convert previously saved JSON output (from `agentci test --format json`)
+    into a self-contained HTML report.
+
+    \b
+    Example:
+        agentci test -c spec.yaml --format json > results.json
+        agentci report -i results.json -o report.html
+    """
+    import json as _json
+    from .engine.results import LayerResult, LayerStatus, QueryResult
+    from .engine.reporter import _emit_html
+
+    try:
+        with open(input_path, encoding="utf-8") as f:
+            data = _json.load(f)
+    except (_json.JSONDecodeError, OSError) as e:
+        console.print(f"[bold red]Error reading JSON:[/] {e}")
+        sys.exit(2)
+
+    # Reconstruct QueryResult objects from serialized JSON
+    raw_results = data.get("results", [])
+    results: list[QueryResult] = []
+    for r in raw_results:
+        def _to_layer(d: dict) -> LayerResult:
+            status_map = {s.value: s for s in LayerStatus}
+            return LayerResult(
+                status=status_map.get(d.get("status", "skip"), LayerStatus.SKIP),
+                messages=d.get("messages", []),
+                details=d.get("details", {}),
+            )
+
+        results.append(QueryResult(
+            query=r.get("query", ""),
+            correctness=_to_layer(r.get("correctness", {})),
+            path=_to_layer(r.get("path", {})),
+            cost=_to_layer(r.get("cost", {})),
+        ))
+
+    _emit_html(results, spec_file="(from JSON)", output_path=output_path)
+    console.print(f"[green]Report generated:[/] {output_path}")
+
+
+@cli.command(name="calibrate")
+@click.option('--spec', '-s', 'config', default='agentci_spec.yaml',
+              type=click.Path(exists=True),
+              help='Path to spec file', show_default=True)
+@click.option('--samples', '-n', default=2, type=int,
+              help='Number of sample queries to run', show_default=True)
+@click.option('--dry-run', is_flag=True,
+              help='Show suggested budgets without updating the spec')
+@click.option('--yes', '-y', is_flag=True,
+              help='Auto-confirm spec updates without prompting')
+def calibrate_cmd(config, samples, dry_run, yes):
+    """Calibrate cost/path budgets by running sample queries.
+
+    Runs N sample queries against your agent to measure actual resource
+    usage, then suggests budget values with headroom.
+
+    \b
+    Examples:
+        agentci calibrate
+        agentci calibrate --samples 3
+        agentci calibrate --dry-run
+    """
+    from pathlib import Path
+    import yaml
+    from rich.panel import Panel
+    from .loader import load_spec
+    from .engine.parallel import resolve_runner
+
+    console.print(Panel(f"[bold cyan]AgentCI Calibration[/] v{__version__}"))
+
+    spec_path = Path(config)
+    spec = load_spec(str(spec_path))
+
+    if not spec.runner:
+        console.print("[red]Error:[/] No runner configured in spec. Add a 'runner' field.")
+        sys.exit(1)
+
+    try:
+        runner_fn = resolve_runner(spec.runner)
+    except Exception as e:
+        console.print(f"[red]Error resolving runner:[/] {e}")
+        sys.exit(1)
+
+    # Select in-scope sample queries
+    candidates = [
+        q for q in spec.queries
+        if not (q.tags and any(t in ["out-of-scope", "greeting"] for t in q.tags))
+    ]
+    if not candidates:
+        console.print("[yellow]No eligible queries for calibration[/]")
+        sys.exit(0)
+
+    sample_queries = candidates[:min(samples, len(candidates))]
+    console.print(f"\n[bold]Running {len(sample_queries)} sample queries...[/]\n")
+
+    # Run queries and collect metrics
+    observations = []
+    for q in sample_queries:
+        query_text = q.query
+        console.print(f"  {query_text[:60]}...")
+        try:
+            trace = runner_fn(query_text)
+            obs = {
+                "query": query_text,
+                "llm_calls": trace.total_llm_calls,
+                "tool_calls": trace.total_tool_calls,
+                "tokens": trace.total_tokens,
+                "cost_usd": trace.total_cost_usd,
+            }
+            observations.append(obs)
+            console.print(
+                f"    [dim]LLM: {obs['llm_calls']}  Tools: {obs['tool_calls']}  "
+                f"Tokens: {obs['tokens']:,}  Cost: ${obs['cost_usd']:.4f}[/]"
+            )
+        except Exception as e:
+            console.print(f"    [red]Failed:[/] {e}")
+
+    if not observations:
+        console.print("\n[red]No successful runs. Cannot calibrate.[/]")
+        sys.exit(1)
+
+    # Compute suggested budgets with headroom
+    max_llm = max(o["llm_calls"] for o in observations)
+    max_tools = max(o["tool_calls"] for o in observations)
+    max_tokens = max(o["tokens"] for o in observations)
+    max_cost = max(o["cost_usd"] for o in observations)
+
+    suggested = {
+        "max_llm_calls": max(10, int(max_llm * 1.5)),
+        "max_tool_calls": max(5, int(max_tools * 1.5)),
+        "max_total_tokens": int(max_tokens * 2.0) if max_tokens else None,
+        "max_cost_usd": round(max_cost * 2.0, 4) if max_cost else None,
+    }
+    # Drop None values
+    suggested = {k: v for k, v in suggested.items() if v is not None}
+
+    # Show comparison table
+    table = Table(title="\nCalibration Results")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Observed Max", justify="right", style="yellow")
+    table.add_column("Suggested Budget", justify="right", style="green")
+    table.add_column("Headroom", justify="right", style="dim")
+
+    table.add_row("LLM Calls", str(max_llm), str(suggested["max_llm_calls"]), "+50%")
+    table.add_row("Tool Calls", str(max_tools), str(suggested["max_tool_calls"]), "+50%")
+    if max_tokens:
+        table.add_row("Total Tokens", f"{max_tokens:,}", f"{suggested['max_total_tokens']:,}", "+100%")
+    if max_cost:
+        table.add_row("Cost (USD)", f"${max_cost:.4f}", f"${suggested['max_cost_usd']:.4f}", "+100%")
+
+    console.print(table)
+
+    if dry_run:
+        console.print("\n[yellow]Dry-run mode:[/] No changes made to spec file")
+        return
+
+    if not yes:
+        confirmed = Confirm.ask(
+            f"\nUpdate {spec_path.name} with these budgets? [Y/n]",
+            default=True,
+        )
+        if not confirmed:
+            console.print("[yellow]Calibration cancelled[/]")
+            return
+
+    # Update spec file
+    with spec_path.open() as f:
+        spec_data = yaml.safe_load(f)
+
+    # Apply to defaults if present, otherwise per-query
+    if "defaults" in spec_data:
+        if "cost" not in spec_data["defaults"]:
+            spec_data["defaults"]["cost"] = {}
+        spec_data["defaults"]["cost"].update(suggested)
+    else:
+        for q in spec_data.get("queries", []):
+            if "cost" not in q:
+                q["cost"] = {}
+            q["cost"].update(suggested)
+
+    with spec_path.open("w") as f:
+        yaml.dump(spec_data, f, default_flow_style=False, sort_keys=False)
+
+    console.print(f"\n[green]✓[/] Updated {spec_path.name}")
+    console.print("[dim]Run 'agentci test' to validate the new budgets[/]")
 
 
 # ── v2 Commands ────────────────────────────────────────────────────────────────
@@ -1692,9 +1999,16 @@ def validate(spec_path):
 
     try:
         spec = load_spec(spec_path)
+        todo_count = sum(1 for q in spec.queries if q.query.strip().upper().startswith("TODO"))
+        real_count = len(spec.queries) - todo_count
         console.print(
             f"[green]✅ Valid:[/] {len(spec.queries)} queries, agent='{spec.agent}'"
         )
+        if todo_count:
+            console.print(
+                f"[yellow]⚠ {todo_count} query(ies) still have TODO placeholders — "
+                f"edit them before running tests[/]"
+            )
         sys.exit(0)
     except (ConfigError, ValidationError) as e:
         console.print(f"[bold red]❌ Validation failed:[/]\n{e}")
@@ -1824,8 +2138,10 @@ def doctor_cmd(config):
               help='Path to agentci_spec.yaml', show_default=True)
 @click.option('--tags', '-t', multiple=True, help='Only evaluate queries with these tags')
 @click.option('--format', 'fmt',
-              type=click.Choice(['console', 'github', 'json', 'prometheus']),
+              type=click.Choice(['console', 'github', 'json', 'prometheus', 'html']),
               default='console', show_default=True, help='Output format')
+@click.option('--output', '-o', default=None, type=click.Path(),
+              help='Output file path (used with --format html, default: agentci-report.html)')
 @click.option('--baseline-dir', default=None,
               help='Override baseline directory from spec')
 @click.option('--workers', '-w', default=4, show_default=True, type=int,
@@ -1836,7 +2152,7 @@ def doctor_cmd(config):
               help='Run with synthetic traces (no API calls). Validates spec structure.')
 @click.option('--yes', '-y', is_flag=True,
               help='Skip cost estimate confirmation (for CI)')
-def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, yes):
+def test_cmd(config, tags, fmt, output, baseline_dir, workers, sample_ensemble, mock, yes):
     """Run AgentCI v2 evaluation against a spec file.
 
     Loads agentci_spec.yaml, runs the agent for each query (capturing traces),
@@ -1878,12 +2194,26 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
 
     effective_baseline_dir = baseline_dir or spec.baseline_dir
 
+    # ── Warn about TODO placeholder queries ───────────────────────────────────
+    todo_queries = [q for q in spec.queries if q.query.strip().upper().startswith("TODO")]
+    if todo_queries:
+        console.print(
+            f"[yellow]Warning:[/] {len(todo_queries)} query(ies) still have TODO placeholders — skipping them:"
+        )
+        for tq in todo_queries:
+            console.print(f"  [dim]• {tq.query[:80]}[/]")
+        spec.queries = [q for q in spec.queries if q not in todo_queries]
+        if not spec.queries:
+            console.print("[bold red]Error:[/] All queries are TODO placeholders. Edit agentci_spec.yaml first.")
+            sys.exit(1)
+        console.print()
+
     # ── Mock mode ─────────────────────────────────────────────────────────────
     if mock:
         from .engine.mock_runner import run_mock_spec
 
         console.print(
-            f"[bold blue]AgentCI v2[/] │ agent: [cyan]{spec.agent}[/] │ "
+            f"[bold blue]AgentCI v{__version__}[/] │ agent: [cyan]{spec.agent}[/] │ "
             f"queries: [cyan]{len(spec.queries)}[/] │ mode: [cyan]mock[/]"
         )
         console.print("[dim]Running with synthetic traces — zero API cost[/]\n")
@@ -1900,7 +2230,7 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
     # ── Check for runner ──────────────────────────────────────────────────────
     if not spec.runner:
         console.print(
-            f"[bold blue]AgentCI v2[/] spec has [cyan]{len(spec.queries)}[/] "
+            f"[bold blue]AgentCI v{__version__}[/] spec has [cyan]{len(spec.queries)}[/] "
             f"queries for agent '[cyan]{spec.agent}[/]'\n"
         )
         console.print(
@@ -1954,29 +2284,19 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
         console.print(f"\n[dim]{format_estimate(est, len(spec.queries))}[/]")
 
         from rich.prompt import Confirm
-        if not Confirm.ask("Proceed?", default=True):
+        if not Confirm.ask("Proceed? [Y/n]", default=True):
             console.print("[yellow]Aborted.[/]")
             sys.exit(0)
 
     # ── Run queries in parallel ───────────────────────────────────────────────
     console.print(
-        f"[bold blue]AgentCI v2[/] │ agent: [cyan]{spec.agent}[/] │ "
+        f"[bold blue]AgentCI v{__version__}[/] │ agent: [cyan]{spec.agent}[/] │ "
         f"queries: [cyan]{len(spec.queries)}[/] │ workers: [cyan]{workers}[/]"
     )
     if fmt in ("console", "github"):
         console.print("")
 
-    try:
-        traces = run_spec_parallel(spec, runner_fn, max_workers=workers)
-    except Exception as e:  # noqa: BLE001
-        console.print(f"[bold red]Infrastructure error:[/] {e}")
-        sys.exit(2)
-
-    if not traces:
-        console.print("[bold red]Error:[/] No traces captured — runner may have failed for all queries.")
-        sys.exit(1)
-
-    # ── Load baselines (optional) ─────────────────────────────────────────────
+    # ── Load baselines (optional) — needed before streaming eval ───────────
     baselines: dict = {}
     baseline_path = Path(effective_baseline_dir)
     if baseline_path.exists() and baseline_path.is_dir():
@@ -1992,21 +2312,58 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
             except Exception:  # noqa: BLE001
                 pass  # Skip malformed baseline files
 
-    # ── Evaluate ──────────────────────────────────────────────────────────────
+    # ── Streaming evaluation: print each result as its trace arrives ───────
+    import threading
+    from .engine.runner import evaluate_query
+    from .engine.reporter import emit_query_result, emit_summary
+
+    query_lookup = {q.query: q for q in spec.queries}
+    streaming_results: list = []
+    _print_lock = threading.Lock()
+    stream_console = fmt in ("console", "github") and fmt != "html"
+
+    def _on_trace(query_text: str, trace):
+        gq = query_lookup.get(query_text)
+        if gq is None:
+            return
+        try:
+            result = evaluate_query(
+                query=gq,
+                trace=trace,
+                baseline_trace=baselines.get(query_text),
+                judge_config=spec.judge_config,
+                spec_dir=str(Path(config).parent) if config else None,
+            )
+            with _print_lock:
+                streaming_results.append(result)
+                if stream_console:
+                    emit_query_result(result)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]Evaluation warning:[/] '{query_text[:40]}': {exc}")
+
     try:
-        results = evaluate_spec(spec, traces, baselines or None)
+        traces = run_spec_parallel(
+            spec, runner_fn, max_workers=workers, on_trace=_on_trace,
+        )
     except Exception as e:  # noqa: BLE001
-        console.print(f"[bold red]Evaluation error:[/] {e}")
-        sys.exit(2)
-    except AgentCIError as e:
-        _print_error_panel(e)
-        sys.exit(2)
-    except Exception as e:  # noqa: BLE001
-        console.print(f"[bold red]Evaluation error:[/] {e}")
+        console.print(f"[bold red]Infrastructure error:[/] {e}")
         sys.exit(2)
 
-    # ── Report ───────────────────────────────────────────────────────────────
-    exit_code = report_results(results, format=fmt, spec_file=config)
+    if not traces:
+        console.print("[bold red]Error:[/] No traces captured — runner may have failed for all queries.")
+        sys.exit(1)
+
+    # ── Report summary / non-console formats ──────────────────────────────
+    results = streaming_results
+    if stream_console:
+        # Individual results already printed; just emit summary + annotations
+        emit_summary(results)
+        if os.environ.get("GITHUB_ACTIONS") == "true" or fmt == "github":
+            from .engine.reporter import _emit_github_annotations
+            _emit_github_annotations(results, config)
+        exit_code = 1 if any(r.hard_fail for r in results) else 0
+    else:
+        exit_code = report_results(results, format=fmt, spec_file=config, output_path=output)
     sys.exit(exit_code)
 
 @cli.command(name="eval")
@@ -2014,13 +2371,15 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
               help='Path to agentci_spec.yaml', show_default=True)
 @click.option('--tags', '-t', multiple=True, help='Only evaluate queries with these tags')
 @click.option('--format', 'fmt',
-              type=click.Choice(['console', 'github', 'json', 'prometheus']),
+              type=click.Choice(['console', 'github', 'json', 'prometheus', 'html']),
               default='console', show_default=True, help='Output format')
+@click.option('--output', '-o', default=None, type=click.Path(),
+              help='Output file path (used with --format html, default: agentci-report.html)')
 @click.option('--workers', '-w', default=4, show_default=True, type=int,
               help='Max parallel workers for query execution')
 @click.option('--sample-ensemble', default=None, type=float,
               help='Fraction of queries to use ensemble judging (0.0-1.0, e.g. 0.2)')
-def eval_cmd(config, tags, fmt, workers, sample_ensemble):
+def eval_cmd(config, tags, fmt, output, workers, sample_ensemble):
     """Run evaluation WITHOUT requiring golden baselines.
 
     Useful for correctness-only checks or absolute cost/path boundaries.
@@ -2065,7 +2424,7 @@ def eval_cmd(config, tags, fmt, workers, sample_ensemble):
         spec.judge_config["sample_ensemble"] = sample_ensemble
 
     console.print(
-        f"[bold blue]AgentCI Eval[/] │ agent: [cyan]{spec.agent}[/] │ "
+        f"[bold blue]AgentCI v{__version__} Eval[/] │ agent: [cyan]{spec.agent}[/] │ "
         f"queries: [cyan]{len(spec.queries)}[/] │ workers: [cyan]{workers}[/]"
     )
     if fmt in ("console", "github"):
@@ -2088,9 +2447,8 @@ def eval_cmd(config, tags, fmt, workers, sample_ensemble):
         console.print(f"[bold red]Evaluation error:[/] {e}")
         sys.exit(2)
 
-    exit_code = report_results(results, format=fmt, spec_file=config)
+    exit_code = report_results(results, format=fmt, spec_file=config, output_path=output)
     sys.exit(exit_code)
-
 
 
 

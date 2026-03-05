@@ -141,6 +141,7 @@ jobs:
 # ──────────────────────────────────────────────────────────────────────────────
 # Multi-agent matrix strategy (uncomment to test multiple agents in parallel):
 #
+{% raw %}
 # jobs:
 #   agentci-eval:
 #     strategy:
@@ -149,4 +150,5 @@ jobs:
 #       fail-fast: false
 #     steps:
 #       - run: agentci test --config demos/${{ matrix.agent }}/agentci_spec.yaml --format github
+{% endraw %}
 # ──────────────────────────────────────────────────────────────────────────────

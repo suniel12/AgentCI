@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 LangGraph Adapter.
 """
@@ -61,9 +63,17 @@ class LangGraphAdapter(BaseAdapter):
         Parses a standard LangChain/LangGraph `messages` state list into a Trace.
         """
         trace = Trace(framework="langgraph", graph_state=state)
-        
+
         messages = state.get("messages", [])
-        
+
+        # Extract final output from last AI message
+        for msg in reversed(messages):
+            if getattr(msg, "type", "") == "ai":
+                content = getattr(msg, "content", "")
+                if content:
+                    trace.metadata["final_output"] = str(content)
+                    break
+
         current_span = Span(name="langgraph_execution")
         
         for msg in messages:

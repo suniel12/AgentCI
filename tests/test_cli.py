@@ -98,7 +98,8 @@ def run(query: str) -> Trace:
 """)
         result = runner.invoke(cli, ['eval'])
         assert result.exit_code == 0
-        assert "AgentCI Eval" in result.output
+        assert "AgentCI v" in result.output
+        assert "Eval" in result.output
 
 
 # ── Tests for guided init helpers ─────────────────────────────────────────────
@@ -631,3 +632,113 @@ class TestCalibrateSpecFromTraces:
         # No in-scope candidates → unchanged
         assert result[0]["cost"]["max_llm_calls"] == 1
         assert result[1]["cost"]["max_llm_calls"] == 1
+
+
+# ── Tests for `agentci calibrate` command ────────────────────────────────────
+
+
+class TestCalibrateCommand:
+    """Tests for the `agentci calibrate` CLI command."""
+
+    def _write_spec(self, tmp_path, *, runner="my.agent:run", queries=None):
+        """Write a minimal spec file and return its path."""
+        import yaml
+
+        if queries is None:
+            queries = [
+                {"query": "What is X?", "tags": ["in-scope"],
+                 "cost": {"max_llm_calls": 3}},
+            ]
+        spec = {
+            "agent": "test-agent",
+            "runner": runner,
+            "queries": queries,
+        }
+        spec_path = tmp_path / "agentci_spec.yaml"
+        spec_path.write_text(yaml.dump(spec, sort_keys=False))
+        return spec_path
+
+    def _make_trace(self, llm_calls=4, tool_calls=2, tokens=500, cost=0.01):
+        from agentci.models import Trace, Span, LLMCall, ToolCall as TC
+        span = Span(
+            name="agent",
+            llm_calls=[
+                LLMCall(model="test", tokens_in=tokens // llm_calls,
+                        tokens_out=tokens // llm_calls)
+                for _ in range(llm_calls)
+            ],
+            tool_calls=[TC(tool_name=f"tool_{i}") for i in range(tool_calls)],
+        )
+        trace = Trace(spans=[span])
+        trace.compute_metrics()
+        return trace
+
+    def test_dry_run_does_not_modify_spec(self, tmp_path):
+        import yaml
+        from unittest.mock import patch
+
+        spec_path = self._write_spec(tmp_path)
+        original = spec_path.read_text()
+
+        mock_trace = self._make_trace()
+
+        with patch("agentci.engine.parallel.resolve_runner",
+                    return_value=lambda q: mock_trace):
+            runner = CliRunner()
+            result = runner.invoke(cli, [
+                "calibrate", "--spec", str(spec_path), "--dry-run",
+            ])
+
+        assert result.exit_code == 0
+        assert "Dry-run" in result.output
+        assert spec_path.read_text() == original
+
+    def test_updates_spec_with_yes_flag(self, tmp_path):
+        import yaml
+        from unittest.mock import patch
+
+        spec_path = self._write_spec(tmp_path)
+        mock_trace = self._make_trace(llm_calls=6)
+
+        with patch("agentci.engine.parallel.resolve_runner",
+                    return_value=lambda q: mock_trace):
+            runner = CliRunner()
+            result = runner.invoke(cli, [
+                "calibrate", "--spec", str(spec_path), "--yes",
+            ])
+
+        assert result.exit_code == 0
+        assert "Updated" in result.output
+
+        with spec_path.open() as f:
+            updated = yaml.safe_load(f)
+        # max(10, int(6 * 1.5)) = 10
+        assert updated["queries"][0]["cost"]["max_llm_calls"] == 10
+
+    def test_no_runner_exits_with_error(self, tmp_path):
+        spec_path = self._write_spec(tmp_path, runner=None)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "calibrate", "--spec", str(spec_path),
+        ])
+
+        assert result.exit_code != 0
+        assert "No runner" in result.output
+
+    def test_shows_calibration_table(self, tmp_path):
+        from unittest.mock import patch
+
+        spec_path = self._write_spec(tmp_path)
+        mock_trace = self._make_trace()
+
+        with patch("agentci.engine.parallel.resolve_runner",
+                    return_value=lambda q: mock_trace):
+            runner = CliRunner()
+            result = runner.invoke(cli, [
+                "calibrate", "--spec", str(spec_path), "--dry-run",
+            ])
+
+        assert result.exit_code == 0
+        assert "LLM Calls" in result.output
+        assert "Tool Calls" in result.output

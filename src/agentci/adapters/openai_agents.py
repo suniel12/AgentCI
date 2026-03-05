@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 OpenAI Agents SDK Adapter for AgentCI.
 
@@ -85,9 +87,23 @@ class AgentCITraceProcessor:
             self._span_map[span_id] = agentci_span
 
     def on_trace_end(self, trace: Any) -> None:
-        """Called when the trace ends. Finalize metrics."""
+        """Called when the trace ends. Finalize metrics and extract output."""
         if self._current_trace is not None:
             self._current_trace.compute_metrics()
+
+            # Auto-extract final output from last agent or generation span
+            if "final_output" not in self._current_trace.metadata:
+                for span in reversed(self._current_trace.spans):
+                    if span.output_data:
+                        self._current_trace.metadata["final_output"] = str(span.output_data)
+                        break
+                    if span.llm_calls:
+                        last_llm = span.llm_calls[-1]
+                        text = getattr(last_llm, "output_text", "")
+                        if text:
+                            self._current_trace.metadata["final_output"] = text
+                            break
+
             self._last_trace = self._current_trace
             self._current_trace = None
 

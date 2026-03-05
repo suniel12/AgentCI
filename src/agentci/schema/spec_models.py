@@ -1,3 +1,5 @@
+# Copyright 2025-2026 The AgentCI Authors
+# SPDX-License-Identifier: Apache-2.0
 """
 AgentCI v2/v3 Spec Models
 
@@ -232,6 +234,14 @@ class PathSpec(BaseModel):
         ge=0.0,
         le=1.0,
         description="Minimum normalised LCS similarity (0=disjoint, 1=identical order)",
+    )
+    expected_tool_sequence: Optional[list[str]] = Field(
+        None,
+        description=(
+            "Expected tool call sequence (ordered list). "
+            "Mismatch produces WARN, not hard fail. "
+            "Example: ['retrieve_docs', 'rerank', 'generate_answer']"
+        ),
     )
     expected_handoff: Optional[str] = Field(
         None,
