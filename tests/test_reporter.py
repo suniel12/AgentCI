@@ -452,3 +452,63 @@ class TestAnswerPreview:
         answer_pos = out.index("Answer:")
         correctness_pos = out.index("CORRECTNESS")
         assert answer_pos < correctness_pos
+
+
+# ── HTML Output ───────────────────────────────────────────────────────────────
+
+
+class TestHTMLOutput:
+    """Tests for HTML report generation."""
+
+    def test_html_file_created(self, tmp_path, capsys):
+        """HTML format creates a file at the specified output path."""
+        output = tmp_path / "report.html"
+        results = [make_result(query="How do I install?")]
+        with patch.dict("os.environ", {}, clear=True):
+            report_results(results, format="html", output_path=str(output))
+        assert output.exists()
+        content = output.read_text()
+        assert "<!DOCTYPE html>" in content
+        assert "AgentCI" in content
+
+    def test_html_summary_stats(self, tmp_path, capsys):
+        """HTML report contains correct summary statistics."""
+        output = tmp_path / "report.html"
+        results = [
+            make_result(query="Q1"),
+            make_result(query="Q2", correctness=fail_layer()),
+            make_result(query="Q3", path=warn_layer()),
+        ]
+        with patch.dict("os.environ", {}, clear=True):
+            report_results(results, format="html", output_path=str(output))
+        content = output.read_text()
+        # 2 passed (Q1 + Q3), 1 failed (Q2), 1 warning (Q3)
+        assert ">2<" in content  # passed count
+        assert ">1<" in content  # failed count and warned count
+        assert ">3<" in content  # total
+
+    def test_html_query_cards(self, tmp_path, capsys):
+        """HTML report contains per-query cards with query text."""
+        output = tmp_path / "report.html"
+        results = [
+            make_result(query="How do I install AgentCI?"),
+            make_result(query="What is RAG?", correctness=fail_layer("Missing keyword")),
+        ]
+        with patch.dict("os.environ", {}, clear=True):
+            report_results(results, format="html", output_path=str(output))
+        content = output.read_text()
+        assert "How do I install AgentCI?" in content
+        assert "What is RAG?" in content
+        assert "FAIL" in content
+        assert "Missing keyword" in content
+
+    def test_html_default_output_path(self, capsys, monkeypatch):
+        """Default output path is agentci-report.html in current directory."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            monkeypatch.chdir(tmpdir)
+            results = [make_result()]
+            with patch.dict("os.environ", {}, clear=True):
+                report_results(results, format="html")
+            from pathlib import Path
+            assert (Path(tmpdir) / "agentci-report.html").exists()

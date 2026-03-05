@@ -78,17 +78,72 @@ class TraceContext:
     def __exit__(self, *args):
         # Compute duration
         self.trace.total_duration_ms = (time.perf_counter() - self._start_time) * 1000
-        
+
         # Roll up metrics
         self.trace.compute_metrics()
-        
+
+        # Auto-extract final output if not manually set
+        self._auto_extract_final_output()
+
         # Remove patches
         for restore_fn in self._patches:
             restore_fn()
-        
+
         # Clear context
         _active_trace.set(None)
         _active_span.set(None)
+
+    def _auto_extract_final_output(self) -> None:
+        """Auto-extract the agent's final output from the trace.
+
+        Only runs if ``final_output`` has not been manually set in
+        ``trace.metadata``.  Extraction priority:
+
+        1. LangGraph state: last AI message's ``.content``
+        2. Last span's ``output_data`` (string)
+        3. Last span's ``output_data`` dict with common keys
+        4. Last LLM call's ``output_text`` from last span
+        """
+        if "final_output" in self.trace.metadata:
+            return
+
+        # 1. LangGraph state
+        graph_state = getattr(self.trace, "graph_state", None)
+        if graph_state:
+            messages = graph_state.get("messages", [])
+            if messages:
+                last_msg = messages[-1]
+                content = getattr(last_msg, "content", None)
+                if content:
+                    self.trace.metadata["final_output"] = str(content)
+                    return
+
+        # 2-3. Last span output_data
+        if self.trace.spans:
+            last_span = self.trace.spans[-1]
+            output = last_span.output_data
+
+            if output is not None:
+                if isinstance(output, str):
+                    self.trace.metadata["final_output"] = output
+                    return
+                if isinstance(output, dict):
+                    for key in ("content", "message", "text", "output"):
+                        if key in output:
+                            self.trace.metadata["final_output"] = str(output[key])
+                            return
+
+            # 4. Last LLM call output
+            if last_span.llm_calls:
+                last_llm = last_span.llm_calls[-1]
+                # Handle both LLMCall objects and raw dicts
+                if isinstance(last_llm, dict):
+                    text = last_llm.get("content") or last_llm.get("output_text", "")
+                else:
+                    text = getattr(last_llm, "output_text", "")
+                if text:
+                    self.trace.metadata["final_output"] = str(text)
+                    return
     
     def _patch_openai(self):
         """Wrap openai.chat.completions.create to capture LLM calls."""

@@ -235,6 +235,14 @@ class PathSpec(BaseModel):
         le=1.0,
         description="Minimum normalised LCS similarity (0=disjoint, 1=identical order)",
     )
+    expected_tool_sequence: Optional[list[str]] = Field(
+        None,
+        description=(
+            "Expected tool call sequence (ordered list). "
+            "Mismatch produces WARN, not hard fail. "
+            "Example: ['retrieve_docs', 'rerank', 'generate_answer']"
+        ),
+    )
     expected_handoff: Optional[str] = Field(
         None,
         description="Expected handoff target agent name",
