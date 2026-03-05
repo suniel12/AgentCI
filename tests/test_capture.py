@@ -5,7 +5,7 @@ import pytest
 from unittest.mock import patch
 
 from agentci.capture import TraceContext, langgraph_trace
-from agentci.models import Trace
+from agentci.models import Trace, Span, LLMCall, SpanKind
 
 
 class TestTraceContextAttach:
@@ -70,3 +70,93 @@ class TestLangGraphTrace:
         with langgraph_trace("rag-agent") as ctx:
             ctx.attach(state)
         assert ctx.trace.graph_state == state
+
+
+# ── Mock helpers for LangGraph-style messages ─────────────────────────────────
+
+class _MockAIMessage:
+    """Minimal stand-in for langchain_core.messages.AIMessage."""
+    def __init__(self, content: str):
+        self.content = content
+        self.type = "ai"
+        self.tool_calls = []
+        self.usage_metadata = None
+
+
+class _MockHumanMessage:
+    def __init__(self, content: str):
+        self.content = content
+        self.type = "human"
+
+
+# ── Auto-Extract Final Output Tests ──────────────────────────────────────────
+
+
+class TestAutoExtractFinalOutput:
+    """Tests for TraceContext._auto_extract_final_output()."""
+
+    def test_extract_from_langgraph_state(self):
+        """Auto-extracts final_output from LangGraph graph_state messages."""
+        with TraceContext(agent_name="test") as ctx:
+            state = {
+                "messages": [
+                    _MockHumanMessage("What is RAG?"),
+                    _MockAIMessage("RAG is retrieval-augmented generation."),
+                ]
+            }
+            ctx.attach(state)
+        assert ctx.trace.metadata["final_output"] == "RAG is retrieval-augmented generation."
+
+    def test_extract_from_span_output_data_string(self):
+        """Auto-extracts from last span's output_data when it's a string."""
+        with TraceContext(agent_name="test") as ctx:
+            ctx.trace.spans[-1].output_data = "The answer is 42."
+        assert ctx.trace.metadata["final_output"] == "The answer is 42."
+
+    def test_extract_from_span_output_data_dict(self):
+        """Auto-extracts from output_data dict with common keys."""
+        for key in ("content", "message", "text", "output"):
+            with TraceContext(agent_name="test") as ctx:
+                ctx.trace.spans[-1].output_data = {key: f"value-{key}"}
+            assert ctx.trace.metadata["final_output"] == f"value-{key}", (
+                f"Failed for dict key '{key}'"
+            )
+
+    def test_skips_when_manually_set(self):
+        """Does not overwrite a manually set final_output."""
+        with TraceContext(agent_name="test") as ctx:
+            ctx.trace.metadata["final_output"] = "manual answer"
+            ctx.trace.spans[-1].output_data = "auto answer"
+        assert ctx.trace.metadata["final_output"] == "manual answer"
+
+    def test_extract_from_llm_call_output_text(self):
+        """Falls back to last LLM call's output_text."""
+        with TraceContext(agent_name="test") as ctx:
+            llm_call = LLMCall(
+                model="gpt-4o",
+                provider="openai",
+                output_text="LLM generated this.",
+            )
+            ctx.trace.spans[-1].llm_calls.append(llm_call)
+        assert ctx.trace.metadata["final_output"] == "LLM generated this."
+
+    def test_extract_from_llm_call_dict(self):
+        """Falls back to last LLM call when stored as raw dict (LangGraph adapter).
+
+        Note: We call _auto_extract_final_output() directly because
+        compute_metrics() doesn't handle raw dicts in llm_calls.  The
+        LangGraph adapter stores dicts; TraceContext.attach() does not.
+        """
+        ctx = TraceContext(agent_name="test")
+        span = Span(kind=SpanKind.AGENT, name="test")
+        span.llm_calls.append({"role": "ai", "content": "Dict-based LLM output."})
+        ctx.trace.spans.append(span)
+        ctx._auto_extract_final_output()
+        assert ctx.trace.metadata["final_output"] == "Dict-based LLM output."
+
+    def test_no_extraction_when_trace_empty(self):
+        """No final_output set when trace has no spans or data."""
+        ctx = TraceContext(agent_name="test")
+        ctx.trace = Trace(agent_name="test")  # No spans at all
+        ctx._auto_extract_final_output()
+        assert "final_output" not in ctx.trace.metadata

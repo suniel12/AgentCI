@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentCI Report</title>
+<style>
+  :root {
+    --pass: #22c55e; --warn: #eab308; --fail: #ef4444; --skip: #94a3b8;
+    --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --muted: #94a3b8;
+    --border: #334155;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: var(--bg); color: var(--text); padding: 2rem; line-height: 1.5; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  .meta { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; }
+
+  /* Dashboard */
+  .dashboard { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 2rem; }
+  .stat { background: var(--card); border-radius: 8px; padding: 1rem 1.5rem;
+          border: 1px solid var(--border); min-width: 120px; text-align: center; }
+  .stat .value { font-size: 2rem; font-weight: 700; }
+  .stat .label { font-size: 0.75rem; text-transform: uppercase; color: var(--muted); }
+  .stat.pass .value { color: var(--pass); }
+  .stat.warn .value { color: var(--warn); }
+  .stat.fail .value { color: var(--fail); }
+
+  /* Query cards */
+  .query-card { background: var(--card); border-radius: 8px; border: 1px solid var(--border);
+                margin-bottom: 1rem; overflow: hidden; }
+  .query-header { padding: 1rem 1.25rem; cursor: pointer; display: flex;
+                  align-items: center; gap: 0.75rem; user-select: none; }
+  .query-header:hover { background: rgba(255,255,255,0.03); }
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px;
+           font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: #fff; }
+  .badge.pass { background: var(--pass); }
+  .badge.warn { background: var(--warn); color: #000; }
+  .badge.fail { background: var(--fail); }
+  .badge.skip { background: var(--skip); color: #000; }
+  .query-text { flex: 1; font-weight: 500; }
+  .chevron { transition: transform 0.2s; font-size: 0.8rem; color: var(--muted); }
+  .query-card.open .chevron { transform: rotate(90deg); }
+
+  .query-body { display: none; padding: 0 1.25rem 1.25rem; border-top: 1px solid var(--border); }
+  .query-card.open .query-body { display: block; }
+
+  .answer-preview { background: rgba(255,255,255,0.05); border-radius: 6px;
+                    padding: 0.75rem 1rem; margin: 0.75rem 0; font-size: 0.9rem;
+                    white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; }
+  .answer-label { font-size: 0.75rem; text-transform: uppercase; color: var(--muted); margin-bottom: 0.25rem; }
+
+  /* Layers */
+  .layer { margin-top: 0.75rem; }
+  .layer-header { font-weight: 600; font-size: 0.85rem; margin-bottom: 0.25rem; }
+  .layer-msg { font-size: 0.85rem; color: var(--muted); padding-left: 1rem; }
+  .layer-msg.pass-msg::before { content: "\2713 "; color: var(--pass); }
+  .layer-msg.warn-msg::before { content: "\2022 "; color: var(--warn); }
+  .layer-msg.fail-msg::before { content: "\2717 "; color: var(--fail); }
+
+  /* Trace tree */
+  .trace-toggle { background: none; border: 1px solid var(--border); color: var(--muted);
+                  padding: 0.3rem 0.75rem; border-radius: 4px; cursor: pointer;
+                  font-size: 0.8rem; margin-top: 0.75rem; }
+  .trace-toggle:hover { border-color: var(--text); color: var(--text); }
+  .trace-tree { display: none; margin-top: 0.5rem; font-size: 0.85rem; font-family: monospace;
+                background: rgba(0,0,0,0.3); border-radius: 6px; padding: 0.75rem 1rem;
+                max-height: 300px; overflow-y: auto; }
+  .trace-tree.open { display: block; }
+  .span-line { padding: 0.1rem 0; }
+  .span-kind { color: var(--muted); }
+  .span-name { color: #60a5fa; font-weight: 500; }
+  .span-detail { color: var(--muted); font-size: 0.8rem; }
+
+  footer { margin-top: 2rem; text-align: center; font-size: 0.75rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>AgentCI Test Report</h1>
+<p class="meta">Generated {{ timestamp }} | Spec: {{ spec_file }}</p>
+
+<!-- Dashboard -->
+<div class="dashboard">
+  <div class="stat pass">
+    <div class="value">{{ passed }}</div>
+    <div class="label">Passed</div>
+  </div>
+  <div class="stat warn">
+    <div class="value">{{ warned }}</div>
+    <div class="label">Warnings</div>
+  </div>
+  <div class="stat fail">
+    <div class="value">{{ failed }}</div>
+    <div class="label">Failed</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ total }}</div>
+    <div class="label">Total</div>
+  </div>
+  {% if total_cost is not none %}
+  <div class="stat">
+    <div class="value">${{ "%.4f"|format(total_cost) }}</div>
+    <div class="label">Total Cost</div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Query Cards -->
+{% for r in results %}
+<div class="query-card{% if r.hard_fail %} open{% endif %}" id="q{{ loop.index }}">
+  <div class="query-header" onclick="toggle('q{{ loop.index }}')">
+    {% if r.hard_fail %}
+    <span class="badge fail">FAIL</span>
+    {% elif r.has_warnings %}
+    <span class="badge warn">WARN</span>
+    {% else %}
+    <span class="badge pass">PASS</span>
+    {% endif %}
+    <span class="query-text">{{ r.query }}</span>
+    <span class="chevron">&#9654;</span>
+  </div>
+  <div class="query-body">
+    {% if r.answer %}
+    <div class="answer-label">Agent Answer</div>
+    <div class="answer-preview">{{ r.answer }}</div>
+    {% endif %}
+
+    {# Correctness layer #}
+    <div class="layer">
+      <div class="layer-header">
+        <span class="badge {{ r.correctness.status.value }}">{{ r.correctness.status.value }}</span>
+        Correctness
+      </div>
+      {% for msg in r.correctness.messages %}
+      <div class="layer-msg {{ r.correctness.status.value }}-msg">{{ msg }}</div>
+      {% endfor %}
+    </div>
+
+    {# Path layer #}
+    <div class="layer">
+      <div class="layer-header">
+        <span class="badge {{ r.path.status.value }}">{{ r.path.status.value }}</span>
+        Path
+      </div>
+      {% for msg in r.path.messages %}
+      <div class="layer-msg {{ r.path.status.value }}-msg">{{ msg }}</div>
+      {% endfor %}
+    </div>
+
+    {# Cost layer #}
+    <div class="layer">
+      <div class="layer-header">
+        <span class="badge {{ r.cost.status.value }}">{{ r.cost.status.value }}</span>
+        Cost
+      </div>
+      {% for msg in r.cost.messages %}
+      <div class="layer-msg {{ r.cost.status.value }}-msg">{{ msg }}</div>
+      {% endfor %}
+    </div>
+
+    {# Trace tree #}
+    {% if r.spans %}
+    <button class="trace-toggle" onclick="toggleTrace(event, 'trace{{ loop.index }}')">Show Trace</button>
+    <div class="trace-tree" id="trace{{ loop.index }}">
+      {% for span in r.spans %}
+      <div class="span-line" style="padding-left: {{ span.depth * 1.2 }}rem;">
+        <span class="span-kind">[{{ span.kind }}]</span>
+        <span class="span-name">{{ span.name }}</span>
+        {% if span.duration_ms %}<span class="span-detail"> {{ "%.0f"|format(span.duration_ms) }}ms</span>{% endif %}
+        {% if span.tool_names %}<span class="span-detail"> tools: {{ span.tool_names }}</span>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+
+<footer>AgentCI v{{ version }} &mdash; <a href="https://github.com/agentci-labs/agentci" style="color:var(--muted)">github.com/agentci-labs/agentci</a></footer>
+
+<script>
+function toggle(id) {
+  document.getElementById(id).classList.toggle('open');
+}
+function toggleTrace(e, id) {
+  e.stopPropagation();
+  document.getElementById(id).classList.toggle('open');
+  var btn = e.target;
+  btn.textContent = document.getElementById(id).classList.contains('open') ? 'Hide Trace' : 'Show Trace';
+}
+</script>
+</body>
+</html>

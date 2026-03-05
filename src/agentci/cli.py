@@ -1787,11 +1787,200 @@ def diff_cmd(baseline, compare, agent, spec_path, baseline_dir, fmt, query_filte
 
 
 @cli.command()
-@click.option('--input', '-i', type=click.Path(exists=True), required=True)
-@click.option('--output', '-o', type=click.Path(), required=True)
-def report(input, output):
-    """Generate an HTML report from a JSON results file."""
-    pass
+@click.option('--input', '-i', 'input_path', type=click.Path(exists=True), required=True,
+              help='Path to a JSON results file (from --format json)')
+@click.option('--output', '-o', 'output_path', type=click.Path(), default='agentci-report.html',
+              show_default=True, help='Output HTML file path')
+def report(input_path, output_path):
+    """Generate an HTML report from a JSON results file.
+
+    Convert previously saved JSON output (from `agentci test --format json`)
+    into a self-contained HTML report.
+
+    \b
+    Example:
+        agentci test -c spec.yaml --format json > results.json
+        agentci report -i results.json -o report.html
+    """
+    import json as _json
+    from .engine.results import LayerResult, LayerStatus, QueryResult
+    from .engine.reporter import _emit_html
+
+    try:
+        with open(input_path, encoding="utf-8") as f:
+            data = _json.load(f)
+    except (_json.JSONDecodeError, OSError) as e:
+        console.print(f"[bold red]Error reading JSON:[/] {e}")
+        sys.exit(2)
+
+    # Reconstruct QueryResult objects from serialized JSON
+    raw_results = data.get("results", [])
+    results: list[QueryResult] = []
+    for r in raw_results:
+        def _to_layer(d: dict) -> LayerResult:
+            status_map = {s.value: s for s in LayerStatus}
+            return LayerResult(
+                status=status_map.get(d.get("status", "skip"), LayerStatus.SKIP),
+                messages=d.get("messages", []),
+                details=d.get("details", {}),
+            )
+
+        results.append(QueryResult(
+            query=r.get("query", ""),
+            correctness=_to_layer(r.get("correctness", {})),
+            path=_to_layer(r.get("path", {})),
+            cost=_to_layer(r.get("cost", {})),
+        ))
+
+    _emit_html(results, spec_file="(from JSON)", output_path=output_path)
+    console.print(f"[green]Report generated:[/] {output_path}")
+
+
+@cli.command(name="calibrate")
+@click.option('--spec', '-s', 'config', default='agentci_spec.yaml',
+              type=click.Path(exists=True),
+              help='Path to spec file', show_default=True)
+@click.option('--samples', '-n', default=2, type=int,
+              help='Number of sample queries to run', show_default=True)
+@click.option('--dry-run', is_flag=True,
+              help='Show suggested budgets without updating the spec')
+@click.option('--yes', '-y', is_flag=True,
+              help='Auto-confirm spec updates without prompting')
+def calibrate_cmd(config, samples, dry_run, yes):
+    """Calibrate cost/path budgets by running sample queries.
+
+    Runs N sample queries against your agent to measure actual resource
+    usage, then suggests budget values with headroom.
+
+    \b
+    Examples:
+        agentci calibrate
+        agentci calibrate --samples 3
+        agentci calibrate --dry-run
+    """
+    from pathlib import Path
+    import yaml
+    from rich.panel import Panel
+    from .loader import load_spec
+    from .engine.parallel import resolve_runner
+
+    console.print(Panel(f"[bold cyan]AgentCI Calibration[/] v{__version__}"))
+
+    spec_path = Path(config)
+    spec = load_spec(str(spec_path))
+
+    if not spec.runner:
+        console.print("[red]Error:[/] No runner configured in spec. Add a 'runner' field.")
+        sys.exit(1)
+
+    try:
+        runner_fn = resolve_runner(spec.runner)
+    except Exception as e:
+        console.print(f"[red]Error resolving runner:[/] {e}")
+        sys.exit(1)
+
+    # Select in-scope sample queries
+    candidates = [
+        q for q in spec.queries
+        if not (q.tags and any(t in ["out-of-scope", "greeting"] for t in q.tags))
+    ]
+    if not candidates:
+        console.print("[yellow]No eligible queries for calibration[/]")
+        sys.exit(0)
+
+    sample_queries = candidates[:min(samples, len(candidates))]
+    console.print(f"\n[bold]Running {len(sample_queries)} sample queries...[/]\n")
+
+    # Run queries and collect metrics
+    observations = []
+    for q in sample_queries:
+        query_text = q.query
+        console.print(f"  {query_text[:60]}...")
+        try:
+            trace = runner_fn(query_text)
+            obs = {
+                "query": query_text,
+                "llm_calls": trace.total_llm_calls,
+                "tool_calls": trace.total_tool_calls,
+                "tokens": trace.total_tokens,
+                "cost_usd": trace.total_cost_usd,
+            }
+            observations.append(obs)
+            console.print(
+                f"    [dim]LLM: {obs['llm_calls']}  Tools: {obs['tool_calls']}  "
+                f"Tokens: {obs['tokens']:,}  Cost: ${obs['cost_usd']:.4f}[/]"
+            )
+        except Exception as e:
+            console.print(f"    [red]Failed:[/] {e}")
+
+    if not observations:
+        console.print("\n[red]No successful runs. Cannot calibrate.[/]")
+        sys.exit(1)
+
+    # Compute suggested budgets with headroom
+    max_llm = max(o["llm_calls"] for o in observations)
+    max_tools = max(o["tool_calls"] for o in observations)
+    max_tokens = max(o["tokens"] for o in observations)
+    max_cost = max(o["cost_usd"] for o in observations)
+
+    suggested = {
+        "max_llm_calls": max(8, int(max_llm * 1.5)),
+        "max_tool_calls": max(5, int(max_tools * 1.5)),
+        "max_total_tokens": int(max_tokens * 2.0) if max_tokens else None,
+        "max_cost_usd": round(max_cost * 2.0, 4) if max_cost else None,
+    }
+    # Drop None values
+    suggested = {k: v for k, v in suggested.items() if v is not None}
+
+    # Show comparison table
+    table = Table(title="\nCalibration Results")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Observed Max", justify="right", style="yellow")
+    table.add_column("Suggested Budget", justify="right", style="green")
+    table.add_column("Headroom", justify="right", style="dim")
+
+    table.add_row("LLM Calls", str(max_llm), str(suggested["max_llm_calls"]), "+50%")
+    table.add_row("Tool Calls", str(max_tools), str(suggested["max_tool_calls"]), "+50%")
+    if max_tokens:
+        table.add_row("Total Tokens", f"{max_tokens:,}", f"{suggested['max_total_tokens']:,}", "+100%")
+    if max_cost:
+        table.add_row("Cost (USD)", f"${max_cost:.4f}", f"${suggested['max_cost_usd']:.4f}", "+100%")
+
+    console.print(table)
+
+    if dry_run:
+        console.print("\n[yellow]Dry-run mode:[/] No changes made to spec file")
+        return
+
+    if not yes:
+        confirmed = Confirm.ask(
+            f"\nUpdate {spec_path.name} with these budgets? [Y/n]",
+            default=True,
+        )
+        if not confirmed:
+            console.print("[yellow]Calibration cancelled[/]")
+            return
+
+    # Update spec file
+    with spec_path.open() as f:
+        spec_data = yaml.safe_load(f)
+
+    # Apply to defaults if present, otherwise per-query
+    if "defaults" in spec_data:
+        if "cost" not in spec_data["defaults"]:
+            spec_data["defaults"]["cost"] = {}
+        spec_data["defaults"]["cost"].update(suggested)
+    else:
+        for q in spec_data.get("queries", []):
+            if "cost" not in q:
+                q["cost"] = {}
+            q["cost"].update(suggested)
+
+    with spec_path.open("w") as f:
+        yaml.dump(spec_data, f, default_flow_style=False, sort_keys=False)
+
+    console.print(f"\n[green]✓[/] Updated {spec_path.name}")
+    console.print("[dim]Run 'agentci test' to validate the new budgets[/]")
 
 
 # ── v2 Commands ────────────────────────────────────────────────────────────────
@@ -1949,8 +2138,10 @@ def doctor_cmd(config):
               help='Path to agentci_spec.yaml', show_default=True)
 @click.option('--tags', '-t', multiple=True, help='Only evaluate queries with these tags')
 @click.option('--format', 'fmt',
-              type=click.Choice(['console', 'github', 'json', 'prometheus']),
+              type=click.Choice(['console', 'github', 'json', 'prometheus', 'html']),
               default='console', show_default=True, help='Output format')
+@click.option('--output', '-o', default=None, type=click.Path(),
+              help='Output file path (used with --format html, default: agentci-report.html)')
 @click.option('--baseline-dir', default=None,
               help='Override baseline directory from spec')
 @click.option('--workers', '-w', default=4, show_default=True, type=int,
@@ -1961,7 +2152,7 @@ def doctor_cmd(config):
               help='Run with synthetic traces (no API calls). Validates spec structure.')
 @click.option('--yes', '-y', is_flag=True,
               help='Skip cost estimate confirmation (for CI)')
-def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, yes):
+def test_cmd(config, tags, fmt, output, baseline_dir, workers, sample_ensemble, mock, yes):
     """Run AgentCI v2 evaluation against a spec file.
 
     Loads agentci_spec.yaml, runs the agent for each query (capturing traces),
@@ -2129,7 +2320,7 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
     query_lookup = {q.query: q for q in spec.queries}
     streaming_results: list = []
     _print_lock = threading.Lock()
-    stream_console = fmt in ("console", "github")
+    stream_console = fmt in ("console", "github") and fmt != "html"
 
     def _on_trace(query_text: str, trace):
         gq = query_lookup.get(query_text)
@@ -2172,7 +2363,7 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
             _emit_github_annotations(results, config)
         exit_code = 1 if any(r.hard_fail for r in results) else 0
     else:
-        exit_code = report_results(results, format=fmt, spec_file=config)
+        exit_code = report_results(results, format=fmt, spec_file=config, output_path=output)
     sys.exit(exit_code)
 
 @cli.command(name="eval")
@@ -2180,13 +2371,15 @@ def test_cmd(config, tags, fmt, baseline_dir, workers, sample_ensemble, mock, ye
               help='Path to agentci_spec.yaml', show_default=True)
 @click.option('--tags', '-t', multiple=True, help='Only evaluate queries with these tags')
 @click.option('--format', 'fmt',
-              type=click.Choice(['console', 'github', 'json', 'prometheus']),
+              type=click.Choice(['console', 'github', 'json', 'prometheus', 'html']),
               default='console', show_default=True, help='Output format')
+@click.option('--output', '-o', default=None, type=click.Path(),
+              help='Output file path (used with --format html, default: agentci-report.html)')
 @click.option('--workers', '-w', default=4, show_default=True, type=int,
               help='Max parallel workers for query execution')
 @click.option('--sample-ensemble', default=None, type=float,
               help='Fraction of queries to use ensemble judging (0.0-1.0, e.g. 0.2)')
-def eval_cmd(config, tags, fmt, workers, sample_ensemble):
+def eval_cmd(config, tags, fmt, output, workers, sample_ensemble):
     """Run evaluation WITHOUT requiring golden baselines.
 
     Useful for correctness-only checks or absolute cost/path boundaries.
@@ -2254,9 +2447,8 @@ def eval_cmd(config, tags, fmt, workers, sample_ensemble):
         console.print(f"[bold red]Evaluation error:[/] {e}")
         sys.exit(2)
 
-    exit_code = report_results(results, format=fmt, spec_file=config)
+    exit_code = report_results(results, format=fmt, spec_file=config, output_path=output)
     sys.exit(exit_code)
-
 
 
 

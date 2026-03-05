@@ -15,6 +15,7 @@ Format options:
     github      — GitHub Actions annotations (::error:: / ::warning::)
     json        — Machine-readable JSON for dashboards
     prometheus  — Prometheus exposition format for Grafana
+    html        — Self-contained HTML report for sharing
 """
 
 from __future__ import annotations
@@ -37,13 +38,15 @@ def report_results(
     results: list[QueryResult],
     format: str = "console",
     spec_file: str = "agentci_spec.yaml",
+    output_path: str | None = None,
 ) -> int:
     """Generate output and return the appropriate exit code.
 
     Args:
-        results:   List of QueryResult from the evaluation engine.
-        format:    Output format: 'console', 'github', 'json', 'prometheus'.
-        spec_file: Path to the spec file (used in GitHub annotation file references).
+        results:    List of QueryResult from the evaluation engine.
+        format:     Output format: 'console', 'github', 'json', 'prometheus', 'html'.
+        spec_file:  Path to the spec file (used in GitHub annotation file references).
+        output_path: File path for HTML output (default: agentci-report.html).
 
     Returns:
         Exit code: 0 = pass, 1 = correctness fail.
@@ -58,6 +61,8 @@ def report_results(
         _emit_json(results)
     elif format == "prometheus":
         _emit_prometheus(results)
+    elif format == "html":
+        _emit_html(results, spec_file, output_path or "agentci-report.html")
     else:
         _emit_console(results)
 
@@ -321,3 +326,116 @@ def _emit_prometheus(results: list[QueryResult]) -> None:
             print(f'agentci_latency_ms{{{ql}}} {actual["latency_ms"]}')
             print(f'agentci_total_tokens{{{ql}}} {actual["total_tokens"]}')
             print(f'agentci_llm_calls{{{ql}}} {actual["llm_calls"]}')
+
+
+# ── HTML Output ───────────────────────────────────────────────────────────────
+
+
+def _emit_html(
+    results: list[QueryResult],
+    spec_file: str,
+    output_path: str,
+) -> None:
+    """Render a self-contained HTML report and write it to *output_path*."""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from jinja2 import Environment, FileSystemLoader
+
+    template_dir = Path(__file__).resolve().parent.parent / "templates"
+    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)
+    template = env.get_template("report.html.j2")
+
+    # Compute summary stats
+    total = len(results)
+    passed = sum(1 for r in results if not r.hard_fail)
+    warned = sum(1 for r in results if r.has_warnings and not r.hard_fail)
+    failed = sum(1 for r in results if r.hard_fail)
+
+    # Compute total cost from cost layer details
+    total_cost = 0.0
+    has_cost = False
+    for r in results:
+        if "actual" in r.cost.details:
+            total_cost += r.cost.details["actual"].get("cost_usd", 0.0)
+            has_cost = True
+
+    # Build per-result view models with answer + flattened spans
+    view_results = []
+    for r in results:
+        answer = _extract_answer_for_html(r)
+        spans = _flatten_spans_for_html(r)
+        view_results.append(_HTMLQueryView(r, answer, spans))
+
+    # Get version
+    try:
+        from agentci import __version__ as version
+    except ImportError:
+        version = "dev"
+
+    html = template.render(
+        timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        spec_file=spec_file,
+        total=total,
+        passed=passed,
+        warned=warned,
+        failed=failed,
+        total_cost=total_cost if has_cost else None,
+        results=view_results,
+        version=version,
+    )
+
+    Path(output_path).write_text(html, encoding="utf-8")
+    print(f"HTML report written to {output_path}")
+
+
+class _HTMLQueryView:
+    """Lightweight view model for the Jinja2 template."""
+
+    def __init__(
+        self,
+        result: QueryResult,
+        answer: str,
+        spans: list[dict[str, Any]],
+    ) -> None:
+        self.query = result.query
+        self.hard_fail = result.hard_fail
+        self.has_warnings = result.has_warnings
+        self.correctness = result.correctness
+        self.path = result.path
+        self.cost = result.cost
+        self.answer = answer
+        self.spans = spans
+
+
+def _extract_answer_for_html(r: QueryResult) -> str:
+    """Extract the agent's answer text from a QueryResult."""
+    trace = getattr(r, "trace", None)
+    if not trace:
+        return ""
+    return trace.metadata.get("final_output", "")
+
+
+def _flatten_spans_for_html(r: QueryResult) -> list[dict[str, Any]]:
+    """Flatten trace spans into a list of dicts for the template."""
+    trace = getattr(r, "trace", None)
+    if not trace or not hasattr(trace, "spans"):
+        return []
+
+    flat: list[dict[str, Any]] = []
+    for span in trace.spans:
+        kind = getattr(span, "kind", "unknown")
+        if hasattr(kind, "value"):
+            kind = kind.value
+        tool_names = ""
+        if hasattr(span, "tool_calls") and span.tool_calls:
+            names = [getattr(tc, "tool_name", "") for tc in span.tool_calls]
+            tool_names = ", ".join(n for n in names if n)
+        flat.append({
+            "kind": kind,
+            "name": getattr(span, "name", ""),
+            "duration_ms": getattr(span, "duration_ms", None),
+            "tool_names": tool_names,
+            "depth": 0,  # flat for now; tree depth can be added later
+        })
+    return flat

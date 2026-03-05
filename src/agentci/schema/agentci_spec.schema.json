@@ -16,8 +16,24 @@
             }
           ],
           "default": null,
-          "description": "Strings that must appear in the answer (case-insensitive)",
+          "description": "Strings that must ALL appear in the answer (case-insensitive, AND logic)",
           "title": "Expected In Answer"
+        },
+        "any_expected_in_answer": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "At least ONE of these strings must appear in the answer (case-insensitive, OR logic)",
+          "title": "Any Expected In Answer"
         },
         "not_in_answer": {
           "anyOf": [
@@ -472,6 +488,22 @@
           "default": null,
           "description": "Minimum normalised LCS similarity (0=disjoint, 1=identical order)",
           "title": "Min Sequence Similarity"
+        },
+        "expected_tool_sequence": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Expected tool call sequence (ordered list). Mismatch produces WARN, not hard fail. Example: ['retrieve_docs', 'rerank', 'generate_answer']",
+          "title": "Expected Tool Sequence"
         },
         "expected_handoff": {
           "anyOf": [

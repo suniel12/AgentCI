@@ -340,3 +340,47 @@ class TestDescriptivePassMessages:
         result = evaluate_path(trace, path(max_loops=5))
         assert result.status == LayerStatus.PASS
         assert any("Loops: 2 ≤ max 5" in m for m in result.messages)
+
+
+# ── expected_tool_sequence ────────────────────────────────────────────────────
+
+
+class TestExpectedToolSequence:
+    def test_exact_match_passes(self):
+        trace = make_trace("A", "B", "C")
+        result = evaluate_path(trace, path(expected_tool_sequence=["A", "B", "C"]))
+        assert result.status == LayerStatus.PASS
+        assert any("sequence matched" in m for m in result.messages)
+
+    def test_wrong_order_warns(self):
+        trace = make_trace("A", "C", "B")
+        result = evaluate_path(trace, path(expected_tool_sequence=["A", "B", "C"]))
+        assert result.status == LayerStatus.WARN
+        assert any("sequence mismatch" in m.lower() for m in result.messages)
+
+    def test_extra_call_warns(self):
+        trace = make_trace("A", "B", "C", "D")
+        result = evaluate_path(trace, path(expected_tool_sequence=["A", "B", "C"]))
+        assert result.status == LayerStatus.WARN
+
+    def test_missing_call_warns(self):
+        trace = make_trace("A", "B")
+        result = evaluate_path(trace, path(expected_tool_sequence=["A", "B", "C"]))
+        assert result.status == LayerStatus.WARN
+
+    def test_none_is_skipped(self):
+        trace = make_trace("A", "B")
+        result = evaluate_path(trace, path(expected_tool_sequence=None))
+        assert result.status == LayerStatus.PASS
+
+    def test_details_contain_sequence_info(self):
+        trace = make_trace("A", "B")
+        result = evaluate_path(trace, path(expected_tool_sequence=["A", "B"]))
+        assert "expected_tool_sequence" in result.details
+        assert result.details["expected_tool_sequence"]["matched"] is True
+
+    def test_diff_shows_first_mismatch(self):
+        trace = make_trace("A", "X", "C")
+        result = evaluate_path(trace, path(expected_tool_sequence=["A", "B", "C"]))
+        assert result.status == LayerStatus.WARN
+        assert any("position 1" in m for m in result.messages)
