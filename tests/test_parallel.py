@@ -9,8 +9,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agentci.engine.parallel import resolve_runner, run_spec, run_spec_parallel
-from agentci.models import Span, Trace
+from agentci.engine.parallel import (
+    _run_with_retry,
+    resolve_runner,
+    run_spec,
+    run_spec_parallel,
+)
+from agentci.models import LLMCall, Span, Trace
 from agentci.schema.spec_models import AgentCISpec, GoldenQuery
 
 
@@ -204,3 +209,122 @@ class TestResolveRunner:
     def test_non_callable_raises_value_error(self):
         with pytest.raises(ValueError, match="not callable"):
             resolve_runner("os:sep")  # os.sep is a string, not callable
+
+
+# ── TraceContext auto-wrapping tests ─────────────────────────────────────────
+
+
+class TestRunWithRetryAutoWrap:
+    """Tests for _run_with_retry auto-wrapping string runners in TraceContext."""
+
+    def test_trace_runner_passes_through(self):
+        """Runner returning a Trace object should be used directly."""
+        trace = _make_trace("test query")
+        result = _run_with_retry(lambda q: trace, "test query", retry_count=0, backoff=0.0)
+        assert result is trace
+
+    def test_str_runner_returns_trace_with_final_output(self):
+        """Runner returning a string should produce a Trace with final_output set."""
+        def str_runner(q: str) -> str:
+            return "Hello, world!"
+
+        result = _run_with_retry(str_runner, "test query", retry_count=0, backoff=0.0)
+        assert isinstance(result, Trace)
+        assert result.metadata["final_output"] == "Hello, world!"
+
+    def test_str_runner_gets_trace_context_capture(self):
+        """Runner returning a string should get LLM calls captured via TraceContext.
+
+        We simulate this by patching TraceContext to inject a fake LLM call into the
+        captured trace's root span.
+        """
+        def str_runner(q: str) -> str:
+            return "answer"
+
+        with patch("agentci.capture.TraceContext") as mock_ctx_cls:
+            # Build a fake TraceContext that adds an LLM call to its trace
+            fake_trace = Trace(agent_name="test", test_name="q")
+            fake_span = Span(name="test")
+            fake_span.llm_calls.append(
+                LLMCall(model="claude-test", tokens_in=10, tokens_out=20)
+            )
+            fake_trace.spans.append(fake_span)
+            fake_trace.compute_metrics()
+
+            mock_ctx = MagicMock()
+            mock_ctx.trace = fake_trace
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_ctx_cls.return_value = mock_ctx
+
+            result = _run_with_retry(str_runner, "q", retry_count=0, backoff=0.0)
+
+        assert isinstance(result, Trace)
+        assert result.metadata["final_output"] == "answer"
+        assert result.total_llm_calls == 1
+
+    def test_trace_runner_merges_empty_spans(self):
+        """If runner returns Trace with no spans but TraceContext captured some, merge."""
+        empty_trace = Trace(agent_name="test", test_name="q")
+        assert empty_trace.spans == []
+
+        with patch("agentci.capture.TraceContext") as mock_ctx_cls:
+            ctx_trace = Trace(agent_name="test", test_name="q")
+            ctx_span = Span(name="captured")
+            ctx_span.llm_calls.append(
+                LLMCall(model="claude-test", tokens_in=5, tokens_out=10)
+            )
+            ctx_trace.spans.append(ctx_span)
+            ctx_trace.compute_metrics()
+
+            mock_ctx = MagicMock()
+            mock_ctx.trace = ctx_trace
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_ctx_cls.return_value = mock_ctx
+
+            result = _run_with_retry(lambda q: empty_trace, "q", retry_count=0, backoff=0.0)
+
+        assert result is empty_trace
+        assert len(result.spans) == 1
+        assert result.spans[0].name == "captured"
+        assert result.total_llm_calls == 1
+
+    def test_agent_name_passed_to_trace_context(self):
+        """agent_name kwarg should be forwarded to TraceContext."""
+        with patch("agentci.capture.TraceContext") as mock_ctx_cls:
+            fake_trace = Trace(agent_name="my-agent", test_name="q")
+            fake_trace.spans.append(Span(name="root"))
+            fake_trace.compute_metrics()
+
+            mock_ctx = MagicMock()
+            mock_ctx.trace = fake_trace
+            mock_ctx.__enter__ = MagicMock(return_value=mock_ctx)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_ctx_cls.return_value = mock_ctx
+
+            _run_with_retry(
+                lambda q: "answer", "q",
+                retry_count=0, backoff=0.0,
+                agent_name="my-agent",
+            )
+
+        mock_ctx_cls.assert_called_once_with(agent_name="my-agent", test_name="q")
+
+    def test_unknown_return_type_wrapped_as_string(self):
+        """Runner returning an unexpected type should be wrapped via str()."""
+        result = _run_with_retry(lambda q: 42, "q", retry_count=0, backoff=0.0)
+        assert isinstance(result, Trace)
+        assert result.metadata["final_output"] == "42"
+
+    def test_run_spec_parallel_passes_agent_name(self):
+        """run_spec_parallel should pass spec.agent as agent_name to _run_with_retry."""
+        spec = _make_spec(["q1"])
+
+        with patch("agentci.engine.parallel._run_with_retry") as mock_retry:
+            mock_retry.return_value = _make_trace("q1")
+            run_spec_parallel(spec, _sync_runner, max_workers=1)
+
+        mock_retry.assert_called_once_with(
+            _sync_runner, "q1", 2, 1.0, agent_name="test-agent",
+        )

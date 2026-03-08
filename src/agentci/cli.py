@@ -52,6 +52,11 @@ except Exception:
 _AGENT_KEYWORDS = [
     "@tool", "def retrieve", "def run", "SystemMessage",
     "bind_tools", "add_node", "add_edge", "ChatOpenAI", "ChatAnthropic",
+    # Broader framework detection
+    "anthropic.Anthropic", "openai.OpenAI", "client.messages.create",
+    "client.chat.completions.create", "tool_use", "function_call",
+    "create_sdk_mcp_server", "ToolNode",
+    "CrewBase", "crew_ai", "Agent(", "Task(",
 ]
 _KB_DIR_NAMES = {"knowledge_base", "kb", "docs", "data", "knowledge"}
 _SKIP_DIRS = {"__pycache__", ".venv", "venv", ".git", "node_modules", "dist"}
@@ -217,8 +222,21 @@ def _detect_tools_from_code(project_dir) -> list[str]:
 
     project_dir = Path(project_dir)
     tools: list[str] = []
-    tool_pattern = re.compile(r'@tool\s*(?:\(.*?\))?\s*\ndef\s+(\w+)', re.DOTALL)
+
+    # Pattern 1: @tool decorator (existing)
+    tool_decorator_pattern = re.compile(r'@tool\s*(?:\(.*?\))?\s*\ndef\s+(\w+)', re.DOTALL)
+
+    # Pattern 2: .bind_tools([...]) (existing)
     bind_pattern = re.compile(r'\.bind_tools\s*\(\s*\[([^\]]+)\]', re.DOTALL)
+
+    # Pattern 3: Anthropic/OpenAI tool schema dicts — "name": "tool_name"
+    tool_schema_pattern = re.compile(r'["\']name["\']\s*:\s*["\'](\w+)["\']')
+
+    # Pattern 4: ToolNode([func1, func2]) — LangGraph
+    tool_node_pattern = re.compile(r'ToolNode\s*\(\s*\[([^\]]+)\]', re.DOTALL)
+
+    # Pattern 5: @tool("name", ...) — first string arg IS the tool name
+    tool_name_arg_pattern = re.compile(r'@tool\s*\(\s*["\'](\w+)["\']', re.DOTALL)
 
     for py_file in project_dir.rglob("*.py"):
         parts = py_file.parts
@@ -230,22 +248,36 @@ def _detect_tools_from_code(project_dir) -> list[str]:
             content = py_file.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        # @tool decorated functions
-        tools.extend(tool_pattern.findall(content))
-        # bind_tools([tool1, tool2]) or bind_tools([{"name": "...", ...}])
+
+        # Pattern 1: @tool decorated functions
+        tools.extend(tool_decorator_pattern.findall(content))
+
+        # Pattern 2: bind_tools([tool1, tool2])
         for match in bind_pattern.findall(content):
             if "{" in match:
-                # Dict-style tool schemas — extract "name" values
                 name_pattern = re.compile(r'"name"\s*:\s*"([^"]+)"')
                 tools.extend(name_pattern.findall(match))
             else:
                 tools.extend(name.strip().strip("'\"") for name in match.split(","))
 
-    # Deduplicate, preserve order
+        # Pattern 3: Tool schema dicts with "name" key
+        # Only extract if this looks like a tools definition context
+        if any(kw in content for kw in ("tools", "input_schema", "parameters", "function")):
+            tools.extend(tool_schema_pattern.findall(content))
+
+        # Pattern 4: ToolNode([func1, func2])
+        for match in tool_node_pattern.findall(content):
+            tools.extend(name.strip().strip("'\"") for name in match.split(","))
+
+        # Pattern 5: @tool("name", ...) — name as first arg
+        tools.extend(tool_name_arg_pattern.findall(content))
+
+    # Deduplicate, preserve order, filter out common false positives
+    _FALSE_POSITIVES = {"name", "type", "string", "object", "description", "text", "input", "output"}
     seen: set[str] = set()
     unique: list[str] = []
     for t in tools:
-        if t and t not in seen:
+        if t and t not in seen and t.lower() not in _FALSE_POSITIVES:
             seen.add(t)
             unique.append(t)
     return unique
@@ -349,7 +381,15 @@ def _build_golden_queries(pairs: list[dict]) -> list[dict]:
 
 
 _RUNNER_FN_NAMES = {"run_for_agentci", "run_agent", "run_for_agent", "run"}
-_RUNNER_BODY_HINTS = ("ctx.trace", "-> Trace", "TraceContext", "langgraph_trace")
+_RUNNER_BODY_HINTS = (
+    # Existing: explicit AgentCI trace usage
+    "ctx.trace", "-> Trace", "TraceContext", "langgraph_trace",
+    # Functions that call LLM APIs (auto-wrapped by TraceContext in parallel.py)
+    "client.messages.create", "client.chat.completions.create",
+    "anthropic.Anthropic", "openai.OpenAI",
+    # Framework entry points
+    "graph.invoke", "crew.kickoff", ".run(",
+)
 
 
 def _detect_runner(project_dir) -> str | None:
@@ -395,6 +435,243 @@ def _detect_runner(project_dir) -> str | None:
                 best = (priority, f"{module}:{fn_name}")
 
     return best[1] if best else None
+
+
+def _generate_tool_schemas(tools: list[str], sdk: str) -> str:
+    """Generate tool schema definitions as Python code."""
+    if not tools:
+        return 'TOOLS = []  # No tools detected — add your tool schemas here'
+
+    if sdk == "anthropic":
+        schemas = []
+        for tool in tools:
+            schemas.append(
+                '    {\n'
+                f'        "name": "{tool}",\n'
+                f'        "description": "TODO: Describe what {tool} does",\n'
+                '        "input_schema": {\n'
+                '            "type": "object",\n'
+                '            "properties": {\n'
+                '                "input": {\n'
+                '                    "type": "string",\n'
+                '                    "description": "TODO: Describe the input"\n'
+                '                }\n'
+                '            },\n'
+                '            "required": ["input"],\n'
+                '        },\n'
+                '    }'
+            )
+        return "TOOLS = [\n" + ",\n".join(schemas) + "\n]"
+
+    if sdk == "openai":
+        schemas = []
+        for tool in tools:
+            schemas.append(
+                '    {\n'
+                '        "type": "function",\n'
+                '        "function": {\n'
+                f'            "name": "{tool}",\n'
+                f'            "description": "TODO: Describe what {tool} does",\n'
+                '            "parameters": {\n'
+                '                "type": "object",\n'
+                '                "properties": {\n'
+                '                    "input": {"type": "string", "description": "TODO"}\n'
+                '                },\n'
+                '                "required": ["input"],\n'
+                '            },\n'
+                '        },\n'
+                '    }'
+            )
+        return "TOOLS = [\n" + ",\n".join(schemas) + "\n]"
+
+    return 'TOOLS = []'
+
+
+def _generate_tool_implementations(tools: list[str]) -> str:
+    """Generate placeholder tool implementations."""
+    if not tools:
+        return '    return f"Unknown tool: {name}"'
+
+    lines = []
+    for tool in tools:
+        lines.append(f'    if name == "{tool}":')
+        lines.append(f'        # TODO: Implement {tool} logic')
+        lines.append(f'        return f"Result from {tool}: {{arguments}}"')
+        lines.append('')
+    lines.append('    return f"Unknown tool: {name}"')
+    return "\n".join(lines)
+
+
+def _generate_runner_file(
+    project_dir,
+    context: dict,
+    detected_tools: list[str],
+    agent_type: str,
+) -> str | None:
+    """Auto-generate a runner.py file based on detected agent code.
+
+    Scans agent files to determine which SDK is used (anthropic, openai, langgraph)
+    and generates a runner that:
+    1. Imports the relevant SDK
+    2. Defines tool schemas matching detected tools
+    3. Implements a ReAct-style agent loop
+    4. Returns a str (TraceContext auto-wrapping handles the rest)
+
+    Returns the module:function path (e.g., "agentci_runner:run_agent") or None.
+    """
+    import re
+    from pathlib import Path
+
+    project_dir = Path(project_dir)
+    runner_path = project_dir / "agentci_runner.py"
+
+    # Detect which SDK the project uses
+    sdk = None
+    model = None
+
+    for agent_file in context.get("agent_files", []):
+        content = agent_file.get("content", "")
+
+        if "anthropic" in content or "claude" in content.lower():
+            sdk = "anthropic"
+            model_match = re.search(r'model\s*=\s*["\']([^"\']+)["\']', content)
+            if model_match:
+                model = model_match.group(1)
+        elif "openai" in content or "ChatOpenAI" in content:
+            sdk = "openai"
+            model_match = re.search(r'model\s*=\s*["\']([^"\']+)["\']', content)
+            if model_match:
+                model = model_match.group(1)
+
+    if not sdk:
+        return None
+
+    # Default models
+    if not model:
+        model = "claude-sonnet-4-20250514" if sdk == "anthropic" else "gpt-4o"
+
+    # Generate tool schemas
+    tool_schemas_code = _generate_tool_schemas(detected_tools, sdk)
+    tool_impl_code = _generate_tool_implementations(detected_tools)
+
+    # Generate the runner file
+    if sdk == "anthropic":
+        runner_code = (
+            '"""Auto-generated AgentCI runner.\n'
+            'Created by: agentci init --generate\n'
+            '\n'
+            'This runner wraps your agent\'s tools using the Anthropic SDK.\n'
+            'AgentCI automatically captures all LLM calls and tool invocations\n'
+            'via monkey-patching — just return the final answer as a string.\n'
+            '\n'
+            'Edit the tool implementations in execute_tool() to match your agent\'s logic.\n'
+            '"""\n'
+            'import os\n'
+            'from typing import Any\n'
+            'import anthropic\n'
+            '\n'
+            f'MODEL = os.environ.get("ANTHROPIC_MODEL", "{model}")\n'
+            'MAX_ITERATIONS = 10\n'
+            '\n'
+            'SYSTEM_PROMPT = (\n'
+            '    "You are a helpful assistant. Use the provided tools when appropriate. "\n'
+            '    "After getting tool results, provide a clear final answer."\n'
+            ')\n'
+            '\n'
+            f'{tool_schemas_code}\n'
+            '\n'
+            'def execute_tool(name: str, arguments: dict[str, Any]) -> str:\n'
+            '    """Execute a tool by name. TODO: Implement your tool logic here."""\n'
+            f'{tool_impl_code}\n'
+            '\n'
+            'def run_agent(query: str) -> str:\n'
+            '    """AgentCI runner entry point. Returns the agent\'s final answer."""\n'
+            '    client = anthropic.Anthropic()\n'
+            '    messages = [{"role": "user", "content": query}]\n'
+            '\n'
+            '    for _ in range(MAX_ITERATIONS):\n'
+            '        response = client.messages.create(\n'
+            '            model=MODEL,\n'
+            '            max_tokens=1024,\n'
+            '            system=SYSTEM_PROMPT,\n'
+            '            tools=TOOLS,\n'
+            '            messages=messages,\n'
+            '        )\n'
+            '\n'
+            '        tool_use_blocks = [b for b in response.content if b.type == "tool_use"]\n'
+            '\n'
+            '        if not tool_use_blocks:\n'
+            '            text_blocks = [b for b in response.content if b.type == "text"]\n'
+            '            return " ".join(b.text for b in text_blocks) if text_blocks else ""\n'
+            '\n'
+            '        messages.append({"role": "assistant", "content": response.content})\n'
+            '\n'
+            '        tool_results = []\n'
+            '        for tool_block in tool_use_blocks:\n'
+            '            result = execute_tool(tool_block.name, tool_block.input)\n'
+            '            tool_results.append({\n'
+            '                "type": "tool_result",\n'
+            '                "tool_use_id": tool_block.id,\n'
+            '                "content": result,\n'
+            '            })\n'
+            '\n'
+            '        messages.append({"role": "user", "content": tool_results})\n'
+            '\n'
+            '    return "Max iterations reached."\n'
+        )
+    elif sdk == "openai":
+        runner_code = (
+            '"""Auto-generated AgentCI runner.\n'
+            'Created by: agentci init --generate\n'
+            '"""\n'
+            'import os\n'
+            'import json\n'
+            'from typing import Any\n'
+            'import openai\n'
+            '\n'
+            f'MODEL = os.environ.get("OPENAI_MODEL", "{model}")\n'
+            'MAX_ITERATIONS = 10\n'
+            '\n'
+            f'{tool_schemas_code}\n'
+            '\n'
+            'def execute_tool(name: str, arguments: dict[str, Any]) -> str:\n'
+            '    """Execute a tool by name. TODO: Implement your tool logic here."""\n'
+            f'{tool_impl_code}\n'
+            '\n'
+            'def run_agent(query: str) -> str:\n'
+            '    """AgentCI runner entry point. Returns the agent\'s final answer."""\n'
+            '    client = openai.OpenAI()\n'
+            '    messages = [{"role": "user", "content": query}]\n'
+            '\n'
+            '    for _ in range(MAX_ITERATIONS):\n'
+            '        response = client.chat.completions.create(\n'
+            '            model=MODEL,\n'
+            '            messages=messages,\n'
+            '            tools=TOOLS,\n'
+            '        )\n'
+            '        msg = response.choices[0].message\n'
+            '\n'
+            '        if not msg.tool_calls:\n'
+            '            return msg.content or ""\n'
+            '\n'
+            '        messages.append(msg)\n'
+            '\n'
+            '        for tc in msg.tool_calls:\n'
+            '            args = json.loads(tc.function.arguments)\n'
+            '            result = execute_tool(tc.function.name, args)\n'
+            '            messages.append({\n'
+            '                "role": "tool",\n'
+            '                "tool_call_id": tc.id,\n'
+            '                "content": result,\n'
+            '            })\n'
+            '\n'
+            '    return "Max iterations reached."\n'
+        )
+    else:
+        return None
+
+    runner_path.write_text(runner_code, encoding="utf-8")
+    return "agentci_runner:run_agent"
 
 
 def _prompt_for_queries_interactive() -> list[str]:
@@ -1060,6 +1337,21 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
 
             # ── Step 5: Runner detection ─────────────────────────────
             detected_runner = _detect_runner(Path("."))
+
+            # If no runner found, generate one automatically
+            if not detected_runner and detected_tools and interview.get("run_mode") == "live":
+                console.print("\n[dim]No runner found — generating agentci_runner.py...[/]")
+                generated_runner = _generate_runner_file(
+                    Path("."), context, detected_tools, agent_type,
+                )
+                if generated_runner:
+                    detected_runner = generated_runner
+                    console.print(f"[green]\u2713[/] Generated runner: [cyan]{generated_runner}[/]")
+                    console.print(
+                        "[dim]  Edit agentci_runner.py to implement your tool logic "
+                        "(look for TODO comments)[/]"
+                    )
+
             runner_default = detected_runner or "myagent.run:run_agent"
             if runner:
                 runner_path = runner

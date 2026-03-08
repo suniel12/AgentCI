@@ -13,9 +13,13 @@ from agentci.cli import (
     _detect_agent_type_from_code,
     _detect_tools_from_code,
     _detect_kb_dir,
+    _detect_runner,
     _load_golden_pairs,
     _generate_smoke_queries,
     _generate_full_queries,
+    _generate_runner_file,
+    _generate_tool_schemas,
+    _generate_tool_implementations,
     _prompt_for_queries_interactive,
     _generate_skeleton_spec,
     _build_next_steps,
@@ -742,3 +746,209 @@ class TestCalibrateCommand:
         assert result.exit_code == 0
         assert "LLM Calls" in result.output
         assert "Tool Calls" in result.output
+
+
+# ── Tests for broadened tool detection (Change 2) ────────────────────────────
+
+
+class TestDetectToolsFromCodeBroadened:
+    """Tests for new regex patterns in _detect_tools_from_code."""
+
+    def test_detects_anthropic_tool_schema(self, tmp_path):
+        """Pattern 3: Anthropic SDK tool schema dicts with 'name' key."""
+        (tmp_path / "agent.py").write_text(
+            'import anthropic\n'
+            'tools = [\n'
+            '    {"name": "calculate", "description": "Do math",\n'
+            '     "input_schema": {"type": "object", "properties": {}}},\n'
+            '    {"name": "get_weather", "description": "Get weather"},\n'
+            ']\n'
+        )
+        tools = _detect_tools_from_code(tmp_path)
+        assert "calculate" in tools
+        assert "get_weather" in tools
+
+    def test_detects_tool_node(self, tmp_path):
+        """Pattern 4: LangGraph ToolNode([func1, func2])."""
+        (tmp_path / "graph.py").write_text(
+            'from langgraph.prebuilt import ToolNode\n'
+            'tool_node = ToolNode([search_docs, grade_answer])\n'
+        )
+        tools = _detect_tools_from_code(tmp_path)
+        assert "search_docs" in tools
+        assert "grade_answer" in tools
+
+    def test_detects_tool_name_arg(self, tmp_path):
+        """Pattern 5: @tool('name') with name as first string arg."""
+        (tmp_path / "tools.py").write_text(
+            'from langchain_core.tools import tool\n'
+            '@tool("reverse_string")\n'
+            'def reverse(s: str) -> str:\n'
+            '    return s[::-1]\n'
+        )
+        tools = _detect_tools_from_code(tmp_path)
+        assert "reverse_string" in tools
+
+    def test_filters_false_positives(self, tmp_path):
+        """Common words like 'name', 'type', 'string' should be filtered out."""
+        (tmp_path / "agent.py").write_text(
+            'import anthropic\n'
+            'tools = [\n'
+            '    {"name": "calculate", "description": "calc",\n'
+            '     "input_schema": {"type": "object", "properties": {\n'
+            '         "input": {"type": "string", "description": "text"}\n'
+            '     }}},\n'
+            ']\n'
+        )
+        tools = _detect_tools_from_code(tmp_path)
+        assert "calculate" in tools
+        # These should be filtered out
+        assert "name" not in tools
+        assert "type" not in tools
+        assert "string" not in tools
+        assert "object" not in tools
+        assert "text" not in tools
+        assert "description" not in tools
+
+
+
+# ── Tests for broadened runner detection (Change 4) ──────────────────────────
+
+
+class TestDetectRunnerBroadened:
+    """Tests for broadened _RUNNER_BODY_HINTS."""
+
+    def test_detects_anthropic_api_runner(self, tmp_path):
+        """Runner using client.messages.create should be detected."""
+        (tmp_path / "runner.py").write_text(
+            'import anthropic\n'
+            'def run_agent(query: str) -> str:\n'
+            '    client = anthropic.Anthropic()\n'
+            '    response = client.messages.create(\n'
+            '        model="claude-sonnet-4-20250514",\n'
+            '        messages=[{"role": "user", "content": query}],\n'
+            '    )\n'
+            '    return response.content[0].text\n'
+        )
+        result = _detect_runner(tmp_path)
+        assert result is not None
+        assert "run_agent" in result
+
+    def test_detects_openai_api_runner(self, tmp_path):
+        """Runner using client.chat.completions.create should be detected."""
+        (tmp_path / "my_runner.py").write_text(
+            'import openai\n'
+            'def run_agent(query: str) -> str:\n'
+            '    client = openai.OpenAI()\n'
+            '    response = client.chat.completions.create(\n'
+            '        model="gpt-4o",\n'
+            '        messages=[{"role": "user", "content": query}],\n'
+            '    )\n'
+            '    return response.choices[0].message.content\n'
+        )
+        result = _detect_runner(tmp_path)
+        assert result is not None
+        assert "run_agent" in result
+
+    def test_detects_graph_invoke_runner(self, tmp_path):
+        """Runner using graph.invoke should be detected."""
+        (tmp_path / "runner.py").write_text(
+            'def run_agent(query: str) -> str:\n'
+            '    return graph.invoke({"messages": [query]})\n'
+        )
+        result = _detect_runner(tmp_path)
+        assert result is not None
+        assert "run_agent" in result
+
+
+# ── Tests for runner generation (Change 3) ───────────────────────────────────
+
+
+class TestGenerateToolSchemas:
+    """Tests for _generate_tool_schemas helper."""
+
+    def test_anthropic_schema(self):
+        code = _generate_tool_schemas(["search", "book"], "anthropic")
+        assert "TOOLS = [" in code
+        assert '"name": "search"' in code
+        assert '"name": "book"' in code
+        assert "input_schema" in code
+
+    def test_openai_schema(self):
+        code = _generate_tool_schemas(["search"], "openai")
+        assert "TOOLS = [" in code
+        assert '"name": "search"' in code
+        assert '"type": "function"' in code
+
+    def test_empty_tools(self):
+        code = _generate_tool_schemas([], "anthropic")
+        assert "TOOLS = []" in code
+
+
+class TestGenerateToolImplementations:
+    """Tests for _generate_tool_implementations helper."""
+
+    def test_generates_stubs(self):
+        code = _generate_tool_implementations(["search", "book"])
+        assert 'if name == "search"' in code
+        assert 'if name == "book"' in code
+        assert "Unknown tool" in code
+
+    def test_empty_tools(self):
+        code = _generate_tool_implementations([])
+        assert "Unknown tool" in code
+
+
+class TestGenerateRunnerFile:
+    """Tests for _generate_runner_file."""
+
+    def test_generates_anthropic_runner(self, tmp_path):
+        context = {
+            "agent_files": [
+                {"path": "agent.py", "content": "import anthropic\nclient = anthropic.Anthropic()"}
+            ]
+        }
+        result = _generate_runner_file(tmp_path, context, ["search"], "tool")
+        assert result == "agentci_runner:run_agent"
+
+        runner_file = tmp_path / "agentci_runner.py"
+        assert runner_file.exists()
+        content = runner_file.read_text()
+        assert "import anthropic" in content
+        assert "def run_agent(query: str)" in content
+        assert '"name": "search"' in content
+
+    def test_generates_openai_runner(self, tmp_path):
+        context = {
+            "agent_files": [
+                {"path": "agent.py", "content": "import openai\nclient = openai.OpenAI()"}
+            ]
+        }
+        result = _generate_runner_file(tmp_path, context, ["lookup"], "tool")
+        assert result == "agentci_runner:run_agent"
+
+        content = (tmp_path / "agentci_runner.py").read_text()
+        assert "import openai" in content
+        assert "def run_agent(query: str)" in content
+
+    def test_returns_none_when_no_sdk(self, tmp_path):
+        context = {
+            "agent_files": [
+                {"path": "agent.py", "content": "def chat(msg): pass"}
+            ]
+        }
+        result = _generate_runner_file(tmp_path, context, ["search"], "tool")
+        assert result is None
+        assert not (tmp_path / "agentci_runner.py").exists()
+
+    def test_detects_model_from_code(self, tmp_path):
+        context = {
+            "agent_files": [
+                {"path": "agent.py", "content": 'import anthropic\nmodel="claude-haiku-3"'}
+            ]
+        }
+        result = _generate_runner_file(tmp_path, context, [], "conversational")
+        assert result == "agentci_runner:run_agent"
+
+        content = (tmp_path / "agentci_runner.py").read_text()
+        assert "claude-haiku-3" in content
