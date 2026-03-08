@@ -86,6 +86,7 @@ def run_spec_parallel(
                 gq.query,
                 retry_count,
                 retry_backoff,
+                agent_name=spec.agent,
             )
             futures[fut] = gq.query
 
@@ -214,21 +215,64 @@ def _run_with_retry(
     query: str,
     retry_count: int,
     backoff: float,
+    agent_name: str = "",
 ) -> Optional["Trace"]:
-    """Call runner_fn with exponential-backoff retry on transient errors."""
+    """Call runner_fn with exponential-backoff retry on transient errors.
+
+    Always wraps the call in TraceContext so that even runners returning
+    plain strings get full LLM/tool capture via monkey-patching.
+    """
+    from agentci.capture import TraceContext
+    from agentci.models import Trace
+
     last_exc: Optional[Exception] = None
 
     for attempt in range(retry_count + 1):
         try:
-            result = runner_fn(query)
-            # Auto-wrap string returns into Trace for convenience
+            # Always wrap in TraceContext for automatic capture
+            with TraceContext(agent_name=agent_name, test_name=query) as ctx:
+                result = runner_fn(query)
+
+            if result is None:
+                return None
+
+            if isinstance(result, Trace):
+                # Runner returned a Trace — use it directly.
+                # But if it has no spans and the context captured some, merge them.
+                if not result.spans and ctx.trace.spans:
+                    result.spans = ctx.trace.spans
+                    result.compute_metrics()
+                return result
+
             if isinstance(result, str):
+                # Runner returned a string — use the TraceContext's captured trace
+                # which has the real LLM calls and tool calls from monkey-patching.
+                trace = ctx.trace
+                trace.metadata["final_output"] = result
+                if trace.spans:
+                    trace.spans[0].output_data = result
+
+                # If TraceContext captured nothing (e.g., runner uses an unsupported SDK),
+                # still return a minimal trace with the answer.
+                if not trace.spans:
+                    trace = _wrap_str_as_trace(result, query)
+
                 logger.info(
-                    "[AgentCI] Runner returned str instead of Trace for '%s' — auto-wrapping.",
+                    "[AgentCI] Runner returned str for '%s' — captured %d LLM calls, %d tool calls.",
                     query[:40],
+                    trace.total_llm_calls,
+                    trace.total_tool_calls,
                 )
-                return _wrap_str_as_trace(result, query)
-            return result
+                return trace
+
+            # Unknown return type — wrap as string
+            logger.warning(
+                "[AgentCI] Runner returned %s instead of Trace for '%s' — wrapping.",
+                type(result).__name__,
+                query[:40],
+            )
+            return _wrap_str_as_trace(str(result), query)
+
         except _RETRYABLE_EXCEPTIONS as exc:
             last_exc = exc
             if attempt < retry_count:
@@ -250,7 +294,6 @@ def _run_with_retry(
                     exc,
                 )
         except Exception as exc:
-            # Non-retryable error — re-raise immediately
             raise exc
 
     raise last_exc  # type: ignore[misc]
