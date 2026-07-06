@@ -314,7 +314,7 @@ class TestAnnotationBudget:
 
             with open(summary_path) as f:
                 content = f.read()
-            assert "AgentCI" in content
+            assert "CIAgent" in content
             assert "Warning" in content
         finally:
             os.unlink(summary_path)
@@ -469,7 +469,7 @@ class TestHTMLOutput:
         assert output.exists()
         content = output.read_text()
         assert "<!DOCTYPE html>" in content
-        assert "AgentCI" in content
+        assert "CIAgent" in content
 
     def test_html_summary_stats(self, tmp_path, capsys):
         """HTML report contains correct summary statistics."""

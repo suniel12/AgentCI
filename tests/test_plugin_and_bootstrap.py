@@ -26,7 +26,7 @@ from click.testing import CliRunner
 from agentci.cli import cli
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PLUGIN_DIR = REPO_ROOT / "plugins" / "agentci"
+PLUGIN_DIR = REPO_ROOT / "plugins" / "ciagent"
 
 TOY_RUNNER = '''
 def run_for_agentci(query: str) -> str:
@@ -142,10 +142,10 @@ queries:
 class TestPluginArtifacts:
     def test_marketplace_manifest(self):
         m = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
-        assert m["name"] == "agentci"
+        assert m["name"] == "ciagent"
         assert m["owner"]["name"]
         entry = m["plugins"][0]
-        assert entry["name"] == "agentci"
+        assert entry["name"] == "ciagent"
         # relative source must resolve inside the repo
         assert (REPO_ROOT / entry["source"]).is_dir()
 
