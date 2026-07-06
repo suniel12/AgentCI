@@ -1,7 +1,7 @@
 [project]
 name = "ciagent"
 version = "0.8.0"
-description = "Continuous Integration for AI Agents. Catch cost spikes and logic regressions before production."
+description = "Find out whether your AI agent's evals are lying to you: stability reports with flip attribution, LLM judge audits, and deterministic checks mined from your KB."
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
@@ -28,9 +28,9 @@ dependencies = [
 ]
 
 [project.urls]
-Documentation = "https://github.com/suniel12/AgentCI#readme"
-Repository = "https://github.com/suniel12/AgentCI.git"
-Issues = "https://github.com/suniel12/AgentCI/issues"
+Documentation = "https://github.com/suniel12/ciagent#readme"
+Repository = "https://github.com/suniel12/ciagent.git"
+Issues = "https://github.com/suniel12/ciagent/issues"
 
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
@@ -42,6 +42,7 @@ dev = ["pytest>=8.0", "ruff", "mypy"]
 
 [project.scripts]
 agentci = "agentci.cli:cli"
+ciagent = "agentci.cli:cli"
 
 [project.entry-points.pytest11]
 agentci = "agentci.pytest_plugin"
