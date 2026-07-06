@@ -64,10 +64,11 @@ include = [
 [tool.hatch.build]
 include = [
   "src/agentci/templates/**/*",
+  "src/agentci/examples/**/*",
 ]
 
 [tool.setuptools.package-data]
-agentci = ["templates/*.j2"]
+agentci = ["templates/*.j2", "examples/*.yaml"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

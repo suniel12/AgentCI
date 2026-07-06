@@ -2779,6 +2779,8 @@ def test_cmd(config, tags, fmt, output, baseline_dir, workers, sample_ensemble, 
     evaluates all three layers (Correctness / Path / Cost), and reports results.
 
     Use --mock to validate your spec with synthetic traces (zero API cost).
+    With no agentci_spec.yaml present, --mock runs a bundled demo spec —
+    try `agentci test --mock --runs 3` in an empty directory (zero API keys).
 
     Use --runs N to run the whole suite N times: a stable aggregate score can
     hide per-query verdict flips. Each flip is attributed to its source —
@@ -2805,6 +2807,25 @@ def test_cmd(config, tags, fmt, output, baseline_dir, workers, sample_ensemble, 
     from .engine.reporter import report_results
     from .engine.runner import evaluate_spec
     from .exceptions import ConfigError
+
+    # ── Zero-key demo fallback ────────────────────────────────────────────────
+    # Only when the user did not pass --config themselves: an explicitly named
+    # spec that is missing must stay an error, never silently become the demo.
+    demo_mode = False
+    config_source = click.get_current_context().get_parameter_source("config")
+    if config_source == click.core.ParameterSource.DEFAULT and not Path(config).exists():
+        if mock:
+            from importlib.resources import files
+
+            config = str(files("agentci").joinpath("examples", "demo_spec.yaml"))
+            demo_mode = True
+        else:
+            console.print(
+                "[bold red]No agentci_spec.yaml found in this directory.[/]\n\n"
+                "  [cyan]agentci init[/]                     scaffold a spec for your own agent\n"
+                "  [cyan]agentci test --mock --runs 3[/]     try the bundled demo (synthetic traces, zero API keys)"
+            )
+            sys.exit(2)
 
     try:
         spec = load_spec(config)
@@ -2849,14 +2870,33 @@ def test_cmd(config, tags, fmt, output, baseline_dir, workers, sample_ensemble, 
         )
         console.print("[dim]Running with synthetic traces — zero API cost[/]\n")
 
+        if demo_mode:
+            console.print(
+                "[yellow]Demo mode:[/] no agentci_spec.yaml found — using the bundled "
+                "demo spec ([bold]synthetic data[/], simulated agent).\n"
+                "[dim]Test your own agent instead: agentci init[/]\n"
+            )
+
         # AGENTCI_MOCK_FLAKY=1 simulates agent-variance across runs so the
         # stability report (and its tests) can be exercised without API keys.
-        mock_flaky = os.environ.get("AGENTCI_MOCK_FLAKY", "").lower() in ("1", "true", "yes")
+        # Demo mode defaults the simulated flakiness ON for multi-run sessions —
+        # the whole point of the demo is showing a stable score hiding verdict
+        # flips — but an explicit env value always wins.
+        flaky_env = os.environ.get("AGENTCI_MOCK_FLAKY")
+        if flaky_env is None:
+            mock_flaky = demo_mode and runs > 1
+        else:
+            mock_flaky = flaky_env.lower() in ("1", "true", "yes")
 
         try:
             run_results = []
             for run_index in range(runs):
-                traces = run_mock_spec(spec, run_index=run_index, flaky=mock_flaky)
+                traces = run_mock_spec(
+                    spec,
+                    run_index=run_index,
+                    flaky=mock_flaky,
+                    flaky_style="spread" if demo_mode else "alternate",
+                )
                 results = evaluate_spec(spec, traces, None)
                 run_results.append(results)
                 if runs > 1 and fmt in ("console", "github"):
@@ -2875,6 +2915,11 @@ def test_cmd(config, tags, fmt, output, baseline_dir, workers, sample_ensemble, 
             )
 
         exit_code = report_results(run_results[0], format=fmt, spec_file=config)
+        if demo_mode and fmt == "console":
+            console.print(
+                "\n[dim]Tip: agentci test --mock --runs 3 runs the demo suite three times "
+                "and shows the stability report with flip-source attribution.[/]"
+            )
         sys.exit(exit_code)
 
     # ── Check for runner ──────────────────────────────────────────────────────

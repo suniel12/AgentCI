@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — zero-key demo (`uvx ciagent test --mock --runs 3`)
+- `agentci test --mock` with no `agentci_spec.yaml` in the working directory now
+  falls back to a bundled demo spec (8 synthetic support-agent queries), clearly
+  labeled as demo mode with synthetic data. An explicitly passed `--config` that
+  is missing remains an error — the fallback only applies to the default path
+- Demo multi-run sessions simulate a pseudo-flaky agent by default with the new
+  `"spread"` style (one query breaks per run), so the aggregate score stays
+  constant while individual verdicts flip — the report the demo exists to show.
+  `AGENTCI_MOCK_FLAKY=0` turns the simulation off; non-demo specs are unaffected
+  (flakiness stays env-var opt-in, `"alternate"` style unchanged)
+- Missing spec without `--mock` now exits with a hint pointing at both
+  `agentci init` and the zero-key demo command
+
 ### Changed — stability report hardening (pre-launch fixes from eng review)
 - **Flip attribution now compares per-layer sub-verdicts first**: if every
   deterministic check returned the same outcome across runs and only the LLM judge's
