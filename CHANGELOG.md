@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### KB-Derived Fact Checks — `agentci generate-checks`
+Mines the knowledge base for hard facts (prices, rates, SKUs, versions,
+explicit quantities) and proposes them as deterministic assertions on
+existing spec queries. One LLM call at authoring time; the checks run
+deterministically forever at zero cost.
+
+- **Brittleness gate**: every candidate is validated against recorded golden
+  answers before it is offered — a check that would fail a known-good answer
+  is rejected automatically with the failing answer shown
+- Only non-paraphrasable facts; prose facts become variant sets
+  (`any_expected_in_answer`), never single literal strings; only
+  `any_expected_in_answer` / `not_in_answer` / `regex_match` are proposed
+- Candidates without a golden answer are `unvalidated` and never
+  auto-accepted, even with `--yes`; interactive review for everything else
+- Merge never overwrites user-written assertions; `.bak` backup on write;
+  `--dry-run` mode
+- New module `agentci.engine.check_generator`; 21 new tests
+
 #### Judge Audit — `agentci judge-audit`
 Meta-evaluation of the LLM judge against ground truth you already have,
 re-scoring recorded golden baselines (the agent is never re-run):

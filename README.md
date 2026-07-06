@@ -156,6 +156,17 @@ So AgentCI runs deterministic checks first and treats the judge as the last reso
 3. **Cost budgets** — LLM calls, tokens, dollars per query.
 4. **LLM judge** (`llm_judge` rubrics, optional) — only for answers that genuinely need judgment, evaluated after every deterministic check has run.
 
+Don't write the fact checks by hand — mine them from your knowledge base:
+
+```bash
+agentci generate-checks
+```
+
+It extracts hard facts (prices, rates, SKUs, "30 days") as variant-set assertions, and
+**validates every candidate against your recorded golden answers first** — a check that
+would fail a known-good answer is rejected before you ever see it. One LLM call at
+authoring time; the checks run free forever. Details: [docs/generate-checks.md](docs/generate-checks.md).
+
 ## Demo
 
 Here's a RAG agent demo where someone "optimizes for latency" by reducing retriever docs from 8 to 1. AgentCI catches the correctness regression:
@@ -171,6 +182,7 @@ agentci test --mock --yes      # Zero-cost synthetic traces, CI-friendly (no key
 agentci test                   # Run 3-layer evaluation (correctness → path → cost)
 agentci test --runs 3          # Stability report: verdict flips + flip-source attribution
 agentci judge-audit            # Audit the LLM judge against checks, retests, hand labels
+agentci generate-checks        # Mine KB facts into deterministic assertions (gated)
 agentci test --format html -o report.html  # HTML report with per-query details
 agentci calibrate              # Measure real agent metrics, auto-tune spec budgets
 agentci doctor                 # Health check: spec, deps, API keys
@@ -183,6 +195,7 @@ agentci report -i results.json # Generate HTML report from JSON results
 - [Quickstart](docs/quickstart.md) — install to first green run
 - [Stability testing](docs/stability.md) — `--runs N`, flip-source attribution
 - [Judge audit](docs/judge-audit.md) — is your LLM judge lying to you?
+- [Generate checks](docs/generate-checks.md) — mine KB facts into gated assertions
 - [Writing tests](docs/writing-tests.md) — the full spec reference
 - [Cost tracking](docs/cost-tracking.md) — budgets and spike detection
 - [Golden traces](docs/golden-traces.md) — record baselines, diff regressions

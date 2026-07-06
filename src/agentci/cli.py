@@ -794,6 +794,12 @@ def _build_next_steps(run_mode: str, created_workflow: bool, has_queries: bool) 
         n = len(steps) + 1
         steps.append(f"{n}. Run [cyan]agentci test[/] to execute live tests")
 
+    n = len(steps) + 1
+    steps.append(
+        f"{n}. Run [cyan]agentci generate-checks[/] to mine deterministic "
+        f"fact checks from your knowledge base"
+    )
+
     if created_workflow:
         n = len(steps) + 1
         steps.append(f"{n}. Commit: [cyan]git add .github/ agentci_spec.yaml[/]")
@@ -2423,6 +2429,162 @@ def doctor_cmd(config):
     console.print(f"\n  [bold]{passed} passed[/], {warned} warnings, {failed} failures\n")
 
     sys.exit(1 if failed > 0 else 0)
+
+
+@cli.command(name="generate-checks")
+@click.option('--config', '-c', default='agentci_spec.yaml',
+              help='Path to agentci_spec.yaml', show_default=True)
+@click.option('--kb', 'kb_path', default=None, type=click.Path(exists=True),
+              help='Knowledge base directory (default: auto-detect)')
+@click.option('--baseline-dir', default=None,
+              help='Golden baselines used to VALIDATE generated checks '
+                   '(default: spec baseline_dir)')
+@click.option('--dry-run', is_flag=True, help='Show candidates, write nothing')
+@click.option('--yes', '-y', is_flag=True,
+              help='Accept all gate-validated checks without prompting '
+                   '(unvalidated ones are still skipped)')
+def generate_checks_cmd(config, kb_path, baseline_dir, dry_run, yes):
+    """Mine the knowledge base for deterministic fact checks.
+
+    Extracts hard facts (prices, rates, SKUs, versions, policy numbers) from
+    your KB and proposes them as deterministic assertions on existing spec
+    queries — reserving the LLM judge for answers with nothing checkable.
+
+    \b
+    Brittleness gate: every candidate is validated against your recorded
+    golden answers first. A check that would FAIL a known-good answer is
+    rejected automatically — you only review checks that survived. Queries
+    with no recorded golden answer can't be gated; those candidates are
+    flagged and require explicit confirmation.
+
+    Extraction uses an LLM once, at authoring time. The generated checks run
+    deterministically forever, at zero cost.
+
+    User-written assertions are never overwritten — only empty fields fill.
+    """
+    from pathlib import Path
+
+    import yaml
+
+    from .engine.check_generator import (
+        collect_kb_text,
+        default_llm,
+        extract_candidates,
+        merge_candidates,
+        validate_candidates,
+    )
+    from .engine.judge_audit import load_answers_from_baselines
+    from .exceptions import ConfigError
+    from .loader import load_spec
+
+    try:
+        spec = load_spec(config)
+    except ConfigError as e:
+        console.print(f"[bold red]Config error:[/] {e}")
+        sys.exit(2)
+
+    effective_kb = kb_path or _detect_kb_dir(Path("."))
+    if not effective_kb:
+        console.print(
+            "[bold red]No knowledge base found.[/] Pass --kb or create "
+            "knowledge_base/, kb/, or docs/ with .md/.txt files."
+        )
+        sys.exit(2)
+    kb_text = collect_kb_text(effective_kb)
+    if not kb_text:
+        console.print(f"[bold red]No .md/.txt files found in '{effective_kb}'.[/]")
+        sys.exit(2)
+
+    effective_baseline_dir = baseline_dir or spec.baseline_dir
+    answers = load_answers_from_baselines(effective_baseline_dir)
+    known_good = {q: [a] for q, a in answers.items()}
+    if not answers:
+        console.print(
+            f"[yellow]Warning:[/] no golden baselines in '{effective_baseline_dir}' — "
+            "generated checks cannot be validated against known-good answers.\n"
+            "Record baselines first ([cyan]agentci record[/]) for the full gate.\n"
+        )
+
+    console.print(
+        f"[bold blue]AgentCI v{__version__}[/] │ generate-checks │ "
+        f"kb: [cyan]{effective_kb}[/] │ queries: [cyan]{len(spec.queries)}[/] │ "
+        f"golden answers: [cyan]{len(answers)}[/]"
+    )
+    console.print("[dim]Extracting hard facts (one-time LLM call)...[/]\n")
+
+    try:
+        result = extract_candidates(spec, kb_text, default_llm)
+    except (RuntimeError, ImportError) as e:
+        console.print(f"[bold red]Extraction error:[/] {e}")
+        sys.exit(2)
+    if not result.candidates:
+        console.print(
+            "No checkable hard facts found for these queries. That's a valid "
+            "outcome — judgment-only queries belong to the judge."
+        )
+        sys.exit(0)
+
+    validate_candidates(result, known_good)
+
+    # ── Present the gate results ───────────────────────────────────────────
+    if result.rejected:
+        console.print(f"[red]✗ {len(result.rejected)} candidate(s) rejected by the "
+                      f"validation gate[/] (would fail a known-good answer):")
+        for c in result.rejected:
+            console.print(f"   • {c.query[:50]!r} {c.field}={c.value!r} — [dim]{c.reason}[/]")
+        console.print()
+
+    accepted = []
+    for c in result.validated:
+        console.print(f"[green]✓ gate passed[/] {c.query[:60]!r}")
+        console.print(f"   {c.field}: {c.value!r}" + (f"  [dim]({c.fact})[/]" if c.fact else ""))
+        if dry_run:
+            continue
+        if yes:
+            accepted.append(c)
+        else:
+            from rich.prompt import Confirm
+            if Confirm.ask("   Add this check?", default=True):
+                accepted.append(c)
+
+    for c in result.unvalidated:
+        console.print(f"[yellow]⚠ unvalidated[/] {c.query[:60]!r} — {c.reason}")
+        console.print(f"   {c.field}: {c.value!r}" + (f"  [dim]({c.fact})[/]" if c.fact else ""))
+        if dry_run or yes:
+            continue  # --yes never auto-accepts ungated checks
+        from rich.prompt import Confirm
+        if Confirm.ask("   Add anyway (no known-good answer to gate it)?", default=False):
+            accepted.append(c)
+
+    if dry_run:
+        console.print(f"\n[dim]Dry run — nothing written. "
+                      f"{len(result.validated)} validated, "
+                      f"{len(result.unvalidated)} unvalidated, "
+                      f"{len(result.rejected)} rejected.[/]")
+        sys.exit(0)
+
+    if not accepted:
+        console.print("\nNo checks accepted — spec unchanged.")
+        sys.exit(0)
+
+    updated, changes = merge_candidates(spec, accepted)
+    if not changes:
+        console.print("\nAll accepted checks already present — spec unchanged.")
+        sys.exit(0)
+
+    backup = Path(config).with_suffix(Path(config).suffix + ".bak")
+    backup.write_text(Path(config).read_text(encoding="utf-8"), encoding="utf-8")
+    Path(config).write_text(
+        yaml.safe_dump(
+            updated.model_dump(exclude_none=True), sort_keys=False, allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    console.print(f"\n[green]Updated {config}[/] (backup: {backup}; note: YAML comments are not preserved)")
+    for change in changes:
+        console.print(f"   • {change}")
+    console.print("\nVerify: [cyan]agentci test --mock --yes[/]")
+    sys.exit(0)
 
 
 @cli.command(name="judge-audit")
