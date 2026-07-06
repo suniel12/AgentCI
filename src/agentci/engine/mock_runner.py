@@ -82,7 +82,13 @@ def mock_run(query: str, query_spec: dict, flaky_break: bool = False) -> Trace:
     return trace
 
 
-def run_mock_spec(spec, run_index: int = 0, flaky: bool = False, **_kwargs) -> dict[str, Trace]:
+def run_mock_spec(
+    spec,
+    run_index: int = 0,
+    flaky: bool = False,
+    flaky_style: str = "alternate",
+    **_kwargs,
+) -> dict[str, Trace]:
     """Run all queries in a spec using mock traces.
 
     Parameters
@@ -92,11 +98,20 @@ def run_mock_spec(spec, run_index: int = 0, flaky: bool = False, **_kwargs) -> d
     run_index : int
         Which run this is (0-based) in a multi-run stability session.
     flaky : bool
-        Simulate deterministic pseudo-flakiness for stability testing:
-        even-indexed queries produce a broken answer on odd run indices
+        Simulate deterministic pseudo-flakiness for stability testing
         (agent-variance). Judge-flake cannot be simulated here — identical
         answers cannot flip deterministic checks by construction; that path
         is covered by unit tests constructing results directly.
+    flaky_style : str
+        How simulated flakiness is distributed across runs:
+
+        - ``"alternate"`` (default): even-indexed queries break on odd run
+          indices. Half the suite flips at once, so the aggregate score
+          visibly dips on flaky runs.
+        - ``"spread"``: exactly one of the first three queries breaks per
+          run (query ``run_index % 3``). The aggregate score stays constant
+          across runs while individual verdicts flip — the "stable score,
+          unstable system" shape the bundled demo exists to show.
 
     Returns
     -------
@@ -106,6 +121,9 @@ def run_mock_spec(spec, run_index: int = 0, flaky: bool = False, **_kwargs) -> d
     traces: dict[str, Trace] = {}
     for i, q in enumerate(spec.queries):
         query_dict = q.model_dump() if hasattr(q, "model_dump") else {}
-        flaky_break = flaky and (i % 2 == 0) and (run_index % 2 == 1)
+        if flaky_style == "spread":
+            flaky_break = flaky and i < 3 and run_index % 3 == i
+        else:
+            flaky_break = flaky and (i % 2 == 0) and (run_index % 2 == 1)
         traces[q.query] = mock_run(q.query, query_dict, flaky_break=flaky_break)
     return traces

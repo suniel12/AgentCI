@@ -1,0 +1,73 @@
+# AgentCI bundled demo spec — SYNTHETIC DATA ONLY.
+#
+# This spec backs the zero-API-key demo:
+#
+#     uvx ciagent test --mock --runs 3
+#
+# When `agentci test --mock` runs with no agentci_spec.yaml in the working
+# directory, the CLI falls back to this file. Traces are synthesized by the
+# mock runner; in multi-run demo sessions a deterministic pseudo-flaky agent
+# is simulated so the stability report shows verdict flips with
+# flip-source attribution. Nothing here touches a real agent or API.
+#
+# To test your own agent instead: `agentci init`
+
+version: 1
+agent: demo-support-agent
+
+queries:
+  - query: "What's your return window?"
+    description: "Policy lookup — returns"
+    correctness:
+      expected_in_answer: ["30 days"]
+    path:
+      expected_tools: [search_kb]
+
+  - query: "Do you ship internationally?"
+    description: "Policy lookup — shipping"
+    correctness:
+      expected_in_answer: ["international shipping"]
+    path:
+      expected_tools: [search_kb]
+
+  - query: "How do I reset my password?"
+    description: "Account help — password reset"
+    correctness:
+      expected_in_answer: ["reset link"]
+    path:
+      expected_tools: [search_kb]
+
+  - query: "What payment methods do you accept?"
+    description: "Policy lookup — payments"
+    correctness:
+      expected_in_answer: ["credit card"]
+    path:
+      expected_tools: [search_kb]
+
+  - query: "Can I change my delivery address after ordering?"
+    description: "Order management — address change"
+    correctness:
+      expected_in_answer: ["before it ships"]
+    path:
+      expected_tools: [search_kb, lookup_order]
+
+  - query: "How do I cancel my subscription?"
+    description: "Account help — cancellation"
+    correctness:
+      expected_in_answer: ["account settings"]
+    path:
+      expected_tools: [search_kb]
+
+  - query: "Do you offer student discounts?"
+    description: "Policy lookup — discounts"
+    correctness:
+      expected_in_answer: ["10%"]
+    path:
+      expected_tools: [search_kb]
+
+  - query: "Where can I download my invoice?"
+    description: "Account help — invoices"
+    correctness:
+      expected_in_answer: ["billing page"]
+    path:
+      expected_tools: [search_kb]
