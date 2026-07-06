@@ -11,6 +11,34 @@ You changed a prompt. Your agent broke in production. Three days later, a user c
 
 Works with OpenAI, Anthropic, and LangGraph. Runs inside pytest.
 
+## See It in 30 Seconds
+
+No install, no API keys, no config — one command runs a bundled demo suite three times on synthetic traces:
+
+```bash
+uvx ciagent test --mock --runs 3
+```
+
+```
+Run 1/3: 7/8 passed
+Run 2/3: 7/8 passed
+Run 3/3: 7/8 passed
+
+────────────────────────────────────────────────────────────
+Stability Report
+────────────────────────────────────────────────────────────
+Suite score across 3 runs: 88%  /  88%  /  88%     ← looks stable
+
+⚠️  FLAKY — 3/8 queries flipped verdicts across runs:      ← is not
+   "What's your return window?"    ❌✅✅  pass_rate=0.67  source: agent-variance
+   "Do you ship internationally?"  ✅❌✅  pass_rate=0.67  source: agent-variance
+   "How do I reset my password?"   ✅✅❌  pass_rate=0.67  source: agent-variance
+
+   Flip sources: 3 agent-variance (fix the agent) │ 0 judge-flake (fix the eval)
+```
+
+The aggregate score is identical every run. Three of the eight verdicts underneath it flipped. A single-run eval score would never tell you — the stability report does, and attributes every flip to the layer that caused it. (The demo simulates a flaky agent; point it at your own with the spec below.)
+
 ## Add to Your Project
 
 ```bash
