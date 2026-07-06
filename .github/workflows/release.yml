@@ -35,7 +35,8 @@ jobs:
 
       - name: Run test suite (release gate)
         run: |
-          pip install dist/*.whl pytest pytest-asyncio
+          WHEEL=$(ls dist/*.whl)
+          pip install "${WHEEL}[all]" pytest pytest-asyncio
           pytest tests/ -q
 
       - uses: actions/upload-artifact@v4
