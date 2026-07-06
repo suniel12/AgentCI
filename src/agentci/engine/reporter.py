@@ -528,8 +528,18 @@ def _serialize_stability(report: "StabilityReport") -> dict[str, Any]:
 
 
 def _serialize_result(r: QueryResult) -> dict[str, Any]:
+    # Answer text included so JSON consumers (coding agents, judge-audit
+    # answer sources) can see what the agent said, not just the verdicts.
+    # Same extractor the correctness layer uses, so any trace shape the
+    # evaluator can grade also serializes its answer.
+    answer = None
+    if r.trace is not None:
+        from .runner import _extract_answer
+
+        answer = _extract_answer(r.trace) or None
     return {
         "query": r.query,
+        "answer": answer,
         "hard_fail": r.hard_fail,
         "has_warnings": r.has_warnings,
         "correctness": {
