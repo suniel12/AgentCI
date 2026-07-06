@@ -7,7 +7,7 @@
 
 ## Overview
 
-CIAgent is a trace-based regression testing framework for AI agents. It captures LLM calls, tool invocations, routing decisions, and costs, then diffs them against known-good baselines to catch semantic drift before production.
+CIAgent is an eval-reliability testing framework for AI agents — it tells you whether the evals themselves can be trusted. Core capabilities: multi-run stability reports with flip-source attribution (`agent-variance` vs `judge-flake`), LLM judge audits against ground truth, and deterministic fact-checks mined from a knowledge base. It captures LLM calls, tool invocations, routing decisions, and costs per query, and can diff against known-good baselines to catch regressions before production.
 
 ## Installation
 

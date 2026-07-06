@@ -151,7 +151,7 @@ def _write_step_summary(messages: list[str]) -> None:
         return
     try:
         with open(summary_path, "a", encoding="utf-8") as fh:
-            fh.write("\n## AgentCI — Additional Warnings\n\n")
+            fh.write("\n## CIAgent — Additional Warnings\n\n")
             fh.write("| # | Warning |\n")
             fh.write("|---|--------|\n")
             for i, msg in enumerate(messages, start=1):
@@ -565,7 +565,7 @@ def _serialize_result(r: QueryResult) -> dict[str, Any]:
 
 def _emit_prometheus(results: list[QueryResult]) -> None:
     """Prometheus exposition format for Grafana dashboards."""
-    print("# AgentCI evaluation metrics")
+    print("# CIAgent evaluation metrics")
     for r in results:
         label = r.query[:40].replace('"', '\\"').replace("\n", " ")
         ql = f'query="{label}"'
