@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed — brand and story
+- **Brand: AgentCI → CIAgent** (display name), standardizing on the `ciagent`
+  package name. New `ciagent` CLI entry point; `agentci` kept as a compatibility
+  alias. Python API names (`agentci` module, `AgentCISpec`, `AGENTCI_MOCK_FLAKY`,
+  `agentci_spec.yaml`) unchanged.
+- **GitHub repo renamed** to `suniel12/ciagent` (old URLs redirect).
+- **Claude Code plugin identity renamed**: install is now
+  `/plugin marketplace add suniel12/ciagent` + `/plugin install ciagent@ciagent`;
+  skills are `ciagent:onboard` / `ciagent:check`. (The 0.8.0 identity below had
+  zero installs.)
+- **README hero, PyPI description, and GitHub About repositioned to the
+  eval-reliability wedge** ("Your eval score is stable. Your system isn't."),
+  per the strategy ADR; regression testing remains as supporting capability.
+
 ## [0.8.0] - 2026-07-06
 
 ### Added — Claude Code plugin (F5: your coding agent onboards and operates CIAgent)

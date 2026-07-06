@@ -7,7 +7,7 @@ Thank you for your interest in contributing to CIAgent!
 1. Fork the repository.
 2. Clone your fork:
    ```bash
-   git clone https://github.com/<your-username>/AgentCI.git
+   git clone https://github.com/<your-username>/ciagent.git
    ```
 3. Create a virtual environment and install dependencies:
    ```bash
