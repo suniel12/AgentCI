@@ -22,16 +22,18 @@ You do not tell `import` the format; it sniffs the file.
 |---------|-----------|-------------|
 | OpenTelemetry GenAI instrumentation (openllmetry, and any GenAI-semconv exporter) | OTLP/JSON envelope, `{"spans": [...]}`, or a flat span list | `otel-genai` |
 | Langfuse (v3+ SDK export) | OTel spans in the `langfuse.*` attribute dialect | `otel-langfuse` |
+| Google ADK (`google-adk` native OTel) | OTel spans in the `gcp.vertex.agent.*` dialect (llm_request/llm_response, tool_call_args/tool_response) | `otel-adk` |
 | LangSmith (`langsmith` run export / `Client.list_runs`) | JSON or JSONL run objects, flat or nested `RunTree` | `langsmith-runs` |
 
 Each dialect is verified against a real export from that tool, not against a
 hand-written fixture — "it speaks OTel" is not the same as "its attribute
-namespace matches," as Langfuse proved. Verified against real captured tool-use
-traces (query, answer, and tool call **with its result** all survive import):
-the **OpenAI** and **Anthropic** providers under openllmetry, and a full
-**CrewAI** crew (agent + tool + task) whose LLM calls openllmetry traces through
-litellm. (CrewAI's imported query is its full constructed task prompt — that is
-the last user message CrewAI actually sends.)
+namespace matches," as Langfuse and Google ADK both proved. Verified against real
+captured tool-use traces (query, answer, and tool call **with its result** all
+survive import): the **OpenAI** and **Anthropic** providers under openllmetry, a
+full **CrewAI** crew (agent + tool + task) whose LLM calls openllmetry traces
+through litellm, and a **Google ADK** agent via ADK's native OTel export.
+(CrewAI's imported query is its full constructed task prompt — that is the last
+user message CrewAI actually sends.)
 
 Because these are all OTel (or OTel-derived) paths, any framework whose runs
 emit GenAI-semconv spans imports through `otel-genai` without a bespoke

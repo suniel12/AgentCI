@@ -518,6 +518,64 @@ class TestRealCrewAIExport:
         assert len(goldens) == 1
 
 
+class TestRealADKExport:
+    """Against a REAL export: a live Google ADK agent (google-adk 2.3 +
+    gemini-2.5-flash, agent + tool) using ADK's NATIVE OTel self-instrumentation
+    (tests/fixtures/adk_otel_real.json). ADK emits a `gcp.vertex.agent.*`
+    dialect — query/answer live in llm_request/llm_response (google-genai
+    Content shape), tool args/result in tool_call_args/tool_response — NOT the
+    gen_ai.input/output.messages shape. This is the dialect gap the importer's
+    otel-adk branch closes (like Langfuse before it)."""
+
+    FIXTURE = "tests/fixtures/adk_otel_real.json"
+
+    def test_detected_as_adk_dialect(self):
+        from ciagent.importers import import_trace_file
+
+        trace, query, fmt = import_trace_file(self.FIXTURE)
+        assert fmt == "otel-adk"
+        assert trace.framework == "otel-adk"
+        assert query == "What's the weather in Paris right now?"
+        assert "Paris" in trace.metadata["final_output"]
+        assert trace.agent_name == "weather_agent"
+
+    def test_maps_llm_calls_without_double_counting_generate_content(self):
+        # 2 call_llm spans -> 2 LLM calls; the gemini generate_content child
+        # spans must NOT become extra empty LLM calls.
+        trace, _ = trace_from_otel(load_spans(self.FIXTURE))
+        assert trace.total_llm_calls == 2
+        llm = trace.spans[0].llm_calls[0]
+        assert llm.model == "gemini-2.5-flash"
+        assert llm.tokens_in > 0 and llm.tokens_out > 0
+
+    def test_recovers_tool_call_with_result(self):
+        trace, _ = trace_from_otel(load_spans(self.FIXTURE))
+        assert trace.tool_call_sequence == ["get_weather"]
+        tc = trace.spans[0].tool_calls[0]
+        assert tc.arguments == {"city": "Paris"}
+        assert tc.result == {"temp_c": 18, "condition": "light rain", "city": "Paris"}
+
+    def test_cli_import_real_adk_export(self, tmp_path):
+        from pathlib import Path
+
+        from click.testing import CliRunner
+
+        from ciagent.cli import cli
+
+        fixture = Path(self.FIXTURE).resolve()
+        spec_path = tmp_path / "agentci_spec.yaml"
+        spec_path.write_text(
+            "agent: adk-import\n"
+            f"baseline_dir: {tmp_path / 'golden'}\n"
+            "queries:\n  - query: \"existing\"\n"
+        )
+        result = CliRunner().invoke(cli, ["import", str(fixture), "-c", str(spec_path)])
+        assert result.exit_code == 0, result.output
+        assert "otel-adk" in _flat(result.output)
+        goldens = list((tmp_path / "golden" / "adk-import").glob("imported-*.json"))
+        assert len(goldens) == 1
+
+
 class TestLangsmithDetection:
     def test_langsmith_runs_export_gets_targeted_error(self, tmp_path):
         f = tmp_path / "runs.json"
