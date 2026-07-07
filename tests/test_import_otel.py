@@ -406,6 +406,56 @@ class TestRealOpenllmetryExport:
         assert len(goldens) == 1
 
 
+class TestRealAnthropicExport:
+    """Against a REAL export: live Anthropic tool_use conversation traced by
+    openllmetry's AnthropicInstrumentor (tests/fixtures/anthropic_otel_real.json).
+    Two `anthropic.chat` spans, provider=anthropic, tool call + result carried
+    in message content. Verifies the F7 import path works on the Anthropic
+    dialect with zero importer changes."""
+
+    FIXTURE = "tests/fixtures/anthropic_otel_real.json"
+
+    def test_maps_query_answer_and_provider(self):
+        spans = load_spans(self.FIXTURE)
+        trace, query = trace_from_otel(spans)
+        assert query == "What's the weather in Paris right now?"
+        assert "Paris" in trace.metadata["final_output"]
+        assert trace.total_llm_calls == 2
+        llm = trace.spans[0].llm_calls[0]
+        assert llm.model == "claude-sonnet-4-5-20250929"
+        assert llm.tokens_in > 0 and llm.tokens_out > 0
+
+    def test_recovers_tool_call_with_result(self):
+        # The F7→F4 hand-off on Anthropic: tool_use call + tool_result survive
+        # import from message content (no execute_tool span).
+        spans = load_spans(self.FIXTURE)
+        trace, _ = trace_from_otel(spans)
+        assert trace.tool_call_sequence == ["get_weather"]
+        tc = trace.spans[0].tool_calls[0]
+        assert tc.arguments == {"city": "Paris"}
+        assert tc.result == {"temp_c": 18, "condition": "light rain", "city": "Paris"}
+
+    def test_cli_import_real_anthropic_export(self, tmp_path):
+        from pathlib import Path
+
+        from click.testing import CliRunner
+
+        from ciagent.cli import cli
+
+        fixture = Path(self.FIXTURE).resolve()
+        spec_path = tmp_path / "agentci_spec.yaml"
+        spec_path.write_text(
+            "agent: anthropic-import\n"
+            f"baseline_dir: {tmp_path / 'golden'}\n"
+            "queries:\n  - query: \"existing\"\n"
+        )
+        result = CliRunner().invoke(cli, ["import", str(fixture), "-c", str(spec_path)])
+        assert result.exit_code == 0, result.output
+        assert "otel-genai" in _flat(result.output)
+        goldens = list((tmp_path / "golden" / "anthropic-import").glob("imported-*.json"))
+        assert len(goldens) == 1
+
+
 class TestLangsmithDetection:
     def test_langsmith_runs_export_gets_targeted_error(self, tmp_path):
         f = tmp_path / "runs.json"
