@@ -133,6 +133,23 @@ def trace_from_otel(spans: list[dict[str, Any]]) -> tuple[Trace, Optional[str]]:
             )
             continue
 
+        # Google ADK (google-adk) self-instrumentation emits a `gcp.vertex.agent.*`
+        # dialect, NOT the gen_ai.input/output.messages shape: `call_llm` spans
+        # carry the request/response as JSON in gcp.vertex.agent.llm_request /
+        # llm_response (google-genai Content shape), `execute_tool` spans carry
+        # args/result in gcp.vertex.agent.tool_call_args / tool_response.
+        # Verified against a live google-adk 2.3 + gemini-2.5-flash run
+        # (tests/fixtures/adk_otel_real.json). Any span bearing a
+        # gcp.vertex.agent.* attribute is ADK-managed — handle it here and skip
+        # the semconv branches (which would otherwise double-count the
+        # generate_content child spans as empty LLM calls).
+        if _is_adk_span(attrs):
+            trace.framework = "otel-adk"
+            query, final_output = _map_adk_span(
+                span, attrs, root, trace, query, final_output,
+            )
+            continue
+
         if op in _AGENT_OPERATIONS or (not op and _looks_like_agent(attrs)):
             agent_name = attrs.get("gen_ai.agent.name") or span.get("name")
             if agent_name:
@@ -357,6 +374,108 @@ def _map_langfuse_span(
         query = lf_input
     if isinstance(lf_output, str) and lf_output.strip():
         final_output = lf_output
+    return query, final_output
+
+
+def _is_adk_span(attrs: dict[str, Any]) -> bool:
+    """A span is Google ADK-managed if it carries any gcp.vertex.agent.* attr."""
+    if str(attrs.get("gen_ai.system") or "") == "gcp.vertex.agent":
+        return True
+    return any(str(k).startswith("gcp.vertex.agent.") for k in attrs)
+
+
+def _adk_text_from_parts(content: Any) -> Optional[str]:
+    """Join the .text parts of a google-genai Content dict ({parts:[{text}]})."""
+    if not isinstance(content, dict):
+        return None
+    texts = [
+        p["text"] for p in (content.get("parts") or [])
+        if isinstance(p, dict) and isinstance(p.get("text"), str) and p["text"]
+    ]
+    return "".join(texts) or None
+
+
+def _adk_last_user_text(contents: Any) -> Optional[str]:
+    """Last role=user text across a google-genai `contents` list.
+
+    Tool results ride as function_response parts with no `text`, so they are
+    skipped and the real user question is what survives.
+    """
+    if not isinstance(contents, list):
+        return None
+    found: Optional[str] = None
+    for c in contents:
+        if isinstance(c, dict) and c.get("role") == "user":
+            text = _adk_text_from_parts(c)
+            if text:
+                found = text
+    return found
+
+
+def _map_adk_span(
+    span: dict[str, Any],
+    attrs: dict[str, Any],
+    root: Span,
+    trace: Trace,
+    query: Optional[str],
+    final_output: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Map one Google ADK (`gcp.vertex.agent.*`) span; returns (query, final_output).
+
+    Shapes verified against a live google-adk 2.3 + gemini-2.5-flash run:
+      execute_tool: gen_ai.tool.name, gcp.vertex.agent.tool_call_args (JSON args),
+                    gcp.vertex.agent.tool_response (JSON result)
+      call_llm:     gcp.vertex.agent.llm_request  (google-genai request:
+                    {model, contents:[{role, parts:[{text|function_call}]}]}),
+                    gcp.vertex.agent.llm_response ({model_version,
+                    content:{parts:[{text}]}, usage_metadata:{prompt_token_count,
+                    candidates_token_count}})
+    generate_content child spans carry only gcp.vertex.agent.event_id/
+    invocation_id (no request/response) — nothing to map, so they no-op here
+    rather than becoming empty LLM calls in the semconv branch.
+    """
+    tool_args = attrs.get("gcp.vertex.agent.tool_call_args")
+    tool_resp = attrs.get("gcp.vertex.agent.tool_response")
+    if tool_args is not None or tool_resp is not None:
+        root.tool_calls.append(ToolCall(
+            tool_name=str(attrs.get("gen_ai.tool.name") or span.get("name") or "unknown-tool"),
+            arguments=_parse_json_attr(tool_args, default={}) or {},
+            result=_parse_json_attr(tool_resp, default=None),
+            duration_ms=_span_duration_ms(span),
+        ))
+        return query, final_output
+
+    req = _parse_json_attr(attrs.get("gcp.vertex.agent.llm_request"), default=None)
+    resp = _parse_json_attr(attrs.get("gcp.vertex.agent.llm_response"), default=None)
+    if isinstance(req, dict) or isinstance(resp, dict):
+        model = ""
+        if isinstance(req, dict):
+            model = str(req.get("model") or "")
+        if isinstance(resp, dict) and resp.get("model_version"):
+            model = str(resp["model_version"])
+        model = model or str(attrs.get("gen_ai.request.model") or "")
+        tokens_in = tokens_out = 0
+        answer = None
+        if isinstance(resp, dict):
+            usage = resp.get("usage_metadata") or {}
+            tokens_in = _as_int(usage.get("prompt_token_count"))
+            tokens_out = _as_int(usage.get("candidates_token_count"))
+            answer = _adk_text_from_parts(resp.get("content"))
+        provider = "gcp.vertex.agent"
+        root.llm_calls.append(LLMCall(
+            model=model,
+            provider=provider,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            output_text=answer or "",
+            cost_usd=compute_cost(provider, model, tokens_in, tokens_out),
+            duration_ms=_span_duration_ms(span),
+        ))
+        user_text = _adk_last_user_text(req.get("contents")) if isinstance(req, dict) else None
+        if user_text:
+            query = user_text
+        if answer:
+            final_output = answer
     return query, final_output
 
 
