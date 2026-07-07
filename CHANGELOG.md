@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-07-07
+
+### Added — `ciagent import`: a production trace becomes a regression test (F7)
+- New `ciagent import <trace_file>` command: convert an exported production
+  trace into a spec query (tagged `imported`) plus a versioned golden
+  baseline you can gate on. The golden carries the recorded tool-call
+  sequence and each `ToolCall.result`, not just the final answer — the tool
+  state a later replay needs to reproduce the failure
+- Format is auto-detected, no flag: OTel GenAI spans (OTLP/JSON envelope,
+  `{"spans": [...]}` wrapper, or a flat span list — what OTel GenAI
+  instrumentation and openllmetry emit), the Langfuse v3+ `langfuse.*`
+  attribute dialect, and LangSmith run exports (JSON or JSONL, flat or
+  nested `RunTree`). Reported source formats: `otel-genai`, `otel-langfuse`,
+  `langsmith-runs`
+- Each dialect verified against a **real export** from that tool, not a
+  hand-written fixture: openllmetry (GenAI semconv, with tool calls
+  recovered from message content), a real Langfuse 4.13 capture, and a real
+  LangSmith SDK export. "It speaks OTel" is not "its attribute namespace
+  matches" — Langfuse proved the gap
+- Round-trip artifact gate (always on): the mapped trace must produce a
+  golden that loads and evaluates cleanly *before* anything is written.
+  Partial traces (no user input, no final output, no spans) are rejected
+  with the missing fields named — a golden that can never pass is a
+  permanent false regression, and import refuses to plant one. Exit codes:
+  `0` imported/`--dry-run` gate passed, `1` gate rejection, `2` file/config
+  error. `--dry-run` maps and gates but writes nothing
+- The spec gains a minimal `imported`-tagged query only when the query text
+  is new (with a `.yaml.bak` backup); existing queries are never modified —
+  only the golden is written
+
+### Added — judge-audit answer sources: audit on fresh answers, gate on goldens
+- `ciagent judge-audit --live` re-runs the agent (spec needs a `runner:`)
+  for exactly the judged queries and scores the fresh answers; the confirm
+  prompt counts both agent and judge calls
+- `ciagent judge-audit --answers results.json` reuses a
+  `ciagent test --format json` run you already paid for
+- Closes the circularity when checks came from `generate-checks`: those
+  checks are validated against the same goldens, so "judge PASS / check
+  FAIL" cannot fire against goldens by construction and Mode-1 agreement is
+  inflated. The rule the report now enforces in guidance: audit on fresh
+  answers, gate on goldens
+
+### Fixed — from the DemoAgents 0.9 sync
+- Assertions read `metadata.final_output` first and never grade the literal
+  string `"None"` as an answer
+- Retired the dead default judge model that could silently mis-route judge
+  calls
+- `AgentCITraceProcessor` now subclasses the OpenAI Agents SDK's
+  `TracingProcessor` base, so the adapter registers cleanly against current
+  SDK versions
+
 ## [0.9.0] - 2026-07-06
 
 ### Added — retrieval layer 2.5: `retrieval:` assertions (F4, F6 Phase 4)
