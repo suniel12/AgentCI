@@ -26,7 +26,9 @@ You do not tell `import` the format; it sniffs the file.
 
 Each dialect is verified against a real export from that tool, not against a
 hand-written fixture — "it speaks OTel" is not the same as "its attribute
-namespace matches," as Langfuse proved.
+namespace matches," as Langfuse proved. Under openllmetry, both the **OpenAI**
+and **Anthropic** providers are verified against real captured tool-use traces
+(query, answer, and tool call **with its result** all survive import).
 
 Because these are all OTel (or OTel-derived) paths, any framework whose runs
 emit GenAI-semconv spans imports through `otel-genai` without a bespoke
