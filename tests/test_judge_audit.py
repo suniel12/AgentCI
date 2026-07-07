@@ -386,3 +386,189 @@ queries:
                   str(tmp_path / "nope"), "--yes"],
         )
         assert result.exit_code == 2
+
+
+# ── --live / --answers sources (F2×F3 circularity fix) ─────────────────────────
+
+
+class TestLiveAnswers:
+    def _spec(self):
+        return AgentCISpec(agent="live-test", queries=[
+            GoldenQuery(
+                query="what rate?",
+                correctness=CorrectnessSpec(
+                    expected_in_answer=["4.5%"],
+                    llm_judge=[JudgeRubric(rule="helpful?")],
+                ),
+            ),
+        ])
+
+    def test_collect_live_answers_with_injected_runner(self):
+        from ciagent.engine.judge_audit import collect_live_answers
+
+        answers = collect_live_answers(
+            self._spec(), run_fn=lambda q: f"fresh answer to: {q}",
+        )
+        assert answers == {"what rate?": "fresh answer to: what rate?"}
+
+    def test_collect_live_answers_requires_runner_key(self):
+        from ciagent.engine.judge_audit import collect_live_answers
+
+        with pytest.raises(ValueError, match="runner"):
+            collect_live_answers(self._spec())  # spec has no runner:
+
+    def test_collect_live_answers_scopes_to_given_queries(self):
+        from ciagent.engine.judge_audit import collect_live_answers
+
+        spec = self._spec()
+        calls = []
+
+        def run_fn(q):
+            calls.append(q)
+            return "an answer"
+
+        collect_live_answers(spec, queries=[], run_fn=run_fn)
+        assert calls == []  # only the judged subset runs — cost control
+
+    def test_live_answers_break_the_baseline_circularity(self):
+        """The point of --live: a fresh wrong answer CAN produce the
+        judge-PASS/check-FAIL row that golden-calibrated answers never do."""
+        from ciagent.engine.judge_audit import collect_live_answers
+
+        spec = self._spec()
+        # generate-checks guarantees goldens contain "4.5%"; the live agent
+        # regressed and no longer says it.
+        answers = collect_live_answers(spec, run_fn=lambda q: "rates are low!")
+        report = run_judge_audit(
+            spec, answers, repeats=1,
+            judge_fn=lambda **kw: {"passed": True, "rationale": "sounds fine"},
+        )
+        assert len(report.false_passes) == 1
+
+
+class TestAnswersFile:
+    def test_load_results_json(self, tmp_path):
+        import json
+
+        from ciagent.engine.judge_audit import load_answers_from_results_json
+
+        f = tmp_path / "results.json"
+        f.write_text(json.dumps({"results": [
+            {"query": "q1", "answer": "a1", "hard_fail": False},
+            {"query": "q2", "answer": None},
+        ]}))
+        assert load_answers_from_results_json(str(f)) == {"q1": "a1"}
+
+    def test_load_results_json_rejects_non_results_shape(self, tmp_path):
+        from ciagent.engine.judge_audit import load_answers_from_results_json
+
+        f = tmp_path / "notresults.json"
+        f.write_text('{"foo": 1}')
+        with pytest.raises(ValueError, match="results file"):
+            load_answers_from_results_json(str(f))
+
+    def test_load_results_json_rejects_answerless_files(self, tmp_path):
+        import json
+
+        from ciagent.engine.judge_audit import load_answers_from_results_json
+
+        f = tmp_path / "old.json"
+        f.write_text(json.dumps({"results": [{"query": "q1"}]}))
+        with pytest.raises(ValueError, match="No answers"):
+            load_answers_from_results_json(str(f))
+
+
+class TestCLILiveAndAnswers:
+    def _write_spec(self, tmp_path, runner=True):
+        spec = tmp_path / "agentci_spec.yaml"
+        spec.write_text(
+            "agent: live-cli-test\n"
+            + ("runner: \"toy_live_agent:run\"\n" if runner else "")
+            + "baseline_dir: ./golden\n"
+            "queries:\n"
+            "  - query: \"what rate do you charge?\"\n"
+            "    correctness:\n"
+            "      expected_in_answer: [\"4.5%\"]\n"
+            "      llm_judge:\n"
+            "        - rule: \"is the answer helpful?\"\n"
+        )
+        return spec
+
+    def _write_toy_runner(self, tmp_path, monkeypatch):
+        (tmp_path / "toy_live_agent.py").write_text(
+            "def run(query):\n"
+            "    return 'our rates are competitive'\n"  # regressed: no 4.5%
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+    def test_cli_live_finds_false_pass_without_baselines(self, tmp_path, monkeypatch):
+        from click.testing import CliRunner
+
+        from ciagent.cli import cli
+
+        self._write_spec(tmp_path)
+        self._write_toy_runner(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            "ciagent.engine.judge.run_judge",
+            lambda **kw: {"passed": True, "score": 5, "rationale": "fine"},
+        )
+        result = CliRunner().invoke(
+            cli, ["judge-audit", "--config", str(tmp_path / "agentci_spec.yaml"),
+                  "--live", "--repeats", "1", "--yes"],
+        )
+        assert "live (fresh agent runs)" in result.output
+        assert "judge PASS / check FAIL: 1" in result.output
+        assert result.exit_code == 1, result.output
+
+    def test_cli_live_without_runner_key_exits_2(self, tmp_path):
+        from click.testing import CliRunner
+
+        from ciagent.cli import cli
+
+        self._write_spec(tmp_path, runner=False)
+        result = CliRunner().invoke(
+            cli, ["judge-audit", "--config", str(tmp_path / "agentci_spec.yaml"),
+                  "--live", "--repeats", "1", "--yes"],
+        )
+        assert result.exit_code == 2
+        assert "runner" in result.output
+
+    def test_cli_answers_file_source(self, tmp_path, monkeypatch):
+        import json
+
+        from click.testing import CliRunner
+
+        from ciagent.cli import cli
+
+        self._write_spec(tmp_path)
+        answers = tmp_path / "results.json"
+        answers.write_text(json.dumps({"results": [
+            {"query": "what rate do you charge?", "answer": "the rate is 4.5%"},
+        ]}))
+        monkeypatch.setattr(
+            "ciagent.engine.judge.run_judge",
+            lambda **kw: {"passed": True, "score": 5, "rationale": "fine"},
+        )
+        result = CliRunner().invoke(
+            cli, ["judge-audit", "--config", str(tmp_path / "agentci_spec.yaml"),
+                  "--answers", str(answers), "--repeats", "1", "--yes"],
+        )
+        assert "results.json" in result.output
+        assert result.exit_code == 0, result.output
+
+    def test_cli_live_and_answers_mutually_exclusive(self, tmp_path):
+        import json
+
+        from click.testing import CliRunner
+
+        from ciagent.cli import cli
+
+        self._write_spec(tmp_path)
+        answers = tmp_path / "results.json"
+        answers.write_text(json.dumps({"results": []}))
+        result = CliRunner().invoke(
+            cli, ["judge-audit", "--config", str(tmp_path / "agentci_spec.yaml"),
+                  "--live", "--answers", str(answers), "--yes"],
+        )
+        assert result.exit_code == 2
+        assert "mutually exclusive" in result.output
