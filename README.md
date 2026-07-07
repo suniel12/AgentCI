@@ -16,7 +16,8 @@ CIAgent tells you whether your agent's evals are lying to you:
 
 Built from a real study: 1 in 7 answers an LLM judge passed were wrong, and deterministic
 checks caught 8 of 8 — methodology and raw numbers in [STUDY.md](STUDY.md).
-Works with OpenAI, Anthropic, and LangGraph. Runs inside pytest.
+Native adapters for OpenAI, Anthropic, and LangGraph; imports exported OTel,
+LangSmith, and Langfuse traces from any stack. Runs inside pytest.
 
 ## See It in 30 Seconds
 
@@ -257,6 +258,7 @@ ciagent report -i results.json # Generate HTML report from JSON results
 - [Writing tests](docs/writing-tests.md) — the full spec reference
 - [Cost tracking](docs/cost-tracking.md) — budgets and spike detection
 - [Golden traces](docs/golden-traces.md) — record baselines, diff regressions
+- [Import production traces](docs/import.md) — turn an exported OTel/LangSmith/Langfuse trace into a gated regression test
 - [CI/CD integration](docs/ci-cd.md) — GitHub Actions setup
 - [LangGraph](docs/langgraph.md) — graph-based agent support
 - [Metrics reference](docs/metrics_reference.md) — every metric, defined
