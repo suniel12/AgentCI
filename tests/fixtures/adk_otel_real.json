@@ -1,0 +1,114 @@
+[
+  {
+    "name": "execute_tool get_weather",
+    "startTimeUnixNano": "1783453515033521000",
+    "endTimeUnixNano": "1783453515033756000",
+    "attributes": {
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.description": "Get the current weather for a city.",
+      "gen_ai.tool.name": "get_weather",
+      "gen_ai.tool.type": "FunctionTool",
+      "gcp.vertex.agent.llm_request": "{}",
+      "gcp.vertex.agent.llm_response": "{}",
+      "gcp.vertex.agent.tool_call_args": "{\"city\": \"Paris\"}",
+      "gen_ai.tool.call.id": "adk-428d129a-fb38-4537-b98b-a6db67f50e0f",
+      "gcp.vertex.agent.event_id": "b17fb1e1-695d-4f99-bf86-85fa6b533b9c",
+      "gcp.vertex.agent.tool_response": "{\"temp_c\": 18, \"condition\": \"light rain\", \"city\": \"Paris\"}"
+    }
+  },
+  {
+    "name": "generate_content gemini-2.5-flash",
+    "startTimeUnixNano": "1783453513952062000",
+    "endTimeUnixNano": "1783453515033989000",
+    "attributes": {
+      "gen_ai.system": "gemini",
+      "gen_ai.operation.name": "generate_content",
+      "gen_ai.request.model": "gemini-2.5-flash",
+      "gen_ai.agent.name": "weather_agent",
+      "gen_ai.conversation.id": "08302103-6b6a-4f02-b177-5768824240fc",
+      "gcp.vertex.agent.event_id": "96b9ea59-ba14-4ad0-869e-2fb07ad3b812",
+      "gcp.vertex.agent.invocation_id": "e-d0fe6721-9ef7-47b2-b305-b52e41cb69bd",
+      "gen_ai.response.finish_reasons": [
+        "stop"
+      ],
+      "gen_ai.usage.input_tokens": 80,
+      "gen_ai.usage.output_tokens": 63,
+      "gen_ai.usage.reasoning.output_tokens": 48
+    }
+  },
+  {
+    "name": "call_llm",
+    "startTimeUnixNano": "1783453513951966000",
+    "endTimeUnixNano": "1783453515034040000",
+    "attributes": {
+      "gen_ai.system": "gcp.vertex.agent",
+      "gen_ai.request.model": "gemini-2.5-flash",
+      "gcp.vertex.agent.invocation_id": "e-d0fe6721-9ef7-47b2-b305-b52e41cb69bd",
+      "gcp.vertex.agent.session_id": "08302103-6b6a-4f02-b177-5768824240fc",
+      "gcp.vertex.agent.event_id": "96b9ea59-ba14-4ad0-869e-2fb07ad3b812",
+      "gcp.vertex.agent.llm_request": "{\"model\": \"gemini-2.5-flash\", \"config\": {\"http_options\": {\"headers\": {\"x-goog-api-client\": \"google-adk/2.3.0 gl-python/3.10.19\", \"user-agent\": \"google-adk/2.3.0 gl-python/3.10.19\"}}, \"system_instruction\": \"You always call the get_weather tool before answering weather questions.\\n\\nYou are an agent. Your internal name is \\\"weather_agent\\\".\", \"tools\": [{\"function_declarations\": [{\"description\": \"Get the current weather for a city.\", \"name\": \"get_weather\", \"parameters_json_schema\": {\"properties\": {\"city\": {\"title\": \"City\", \"type\": \"string\"}}, \"required\": [\"city\"], \"title\": \"get_weatherParams\", \"type\": \"object\"}}]}]}, \"contents\": [{\"parts\": [{\"text\": \"What's the weather in Paris right now?\"}], \"role\": \"user\"}]}",
+      "gcp.vertex.agent.llm_response": "{\"model_version\":\"gemini-2.5-flash\",\"content\":{\"parts\":[{\"function_call\":{\"args\":{\"city\":\"Paris\"},\"name\":\"get_weather\"},\"thought_signature\":\"CuIBARFNMg9qsudcRbkid8_LML5sYMCy2oipMRUP28VvkCxrGhfLuIw009mnVzwe7A15YzUHoTSY3BtOinWA9aJIwh8f1OpE8np6SQPykqxjkZIzCFQunkFsBlfubf0qkB2bBvWi0MRLBmUWfhhrNXuvlvctzPz1ha7lYhc-hwPItrfXB09hH9lsEfhqTafr0q6bBz0RvTM56RfqF23LyKv-_n4y8PGDq2eY39skJWFigwRDuShKLCakLQEW9cKXU3SX2G7Enz7ppemt_DmPgTnZIMSDScaE8DbhDkuNWrLsT3gPoQ==\"}],\"role\":\"model\"},\"finish_reason\":\"STOP\",\"usage_metadata\":{\"candidates_token_count\":15,\"prompt_token_count\":80,\"prompt_tokens_details\":[{\"modality\":\"TEXT\",\"token_count\":80}],\"thoughts_token_count\":48,\"total_token_count\":143}}",
+      "gen_ai.usage.input_tokens": 80,
+      "gen_ai.usage.output_tokens": 63,
+      "gen_ai.usage.reasoning.output_tokens": 48,
+      "gen_ai.response.finish_reasons": [
+        "stop"
+      ]
+    }
+  },
+  {
+    "name": "generate_content gemini-2.5-flash",
+    "startTimeUnixNano": "1783453515037978000",
+    "endTimeUnixNano": "1783453515879630000",
+    "attributes": {
+      "gen_ai.system": "gemini",
+      "gen_ai.operation.name": "generate_content",
+      "gen_ai.request.model": "gemini-2.5-flash",
+      "gen_ai.agent.name": "weather_agent",
+      "gen_ai.conversation.id": "08302103-6b6a-4f02-b177-5768824240fc",
+      "gcp.vertex.agent.event_id": "a2ee56cc-5ba5-4286-ba02-b4326489b04f",
+      "gcp.vertex.agent.invocation_id": "e-d0fe6721-9ef7-47b2-b305-b52e41cb69bd",
+      "gen_ai.response.finish_reasons": [
+        "stop"
+      ],
+      "gen_ai.usage.input_tokens": 126,
+      "gen_ai.usage.output_tokens": 19
+    }
+  },
+  {
+    "name": "call_llm",
+    "startTimeUnixNano": "1783453515037878000",
+    "endTimeUnixNano": "1783453515879785000",
+    "attributes": {
+      "gen_ai.system": "gcp.vertex.agent",
+      "gen_ai.request.model": "gemini-2.5-flash",
+      "gcp.vertex.agent.invocation_id": "e-d0fe6721-9ef7-47b2-b305-b52e41cb69bd",
+      "gcp.vertex.agent.session_id": "08302103-6b6a-4f02-b177-5768824240fc",
+      "gcp.vertex.agent.event_id": "a2ee56cc-5ba5-4286-ba02-b4326489b04f",
+      "gcp.vertex.agent.llm_request": "{\"model\": \"gemini-2.5-flash\", \"config\": {\"http_options\": {\"headers\": {\"x-goog-api-client\": \"google-adk/2.3.0 gl-python/3.10.19\", \"user-agent\": \"google-adk/2.3.0 gl-python/3.10.19\"}}, \"system_instruction\": \"You always call the get_weather tool before answering weather questions.\\n\\nYou are an agent. Your internal name is \\\"weather_agent\\\".\", \"tools\": [{\"function_declarations\": [{\"description\": \"Get the current weather for a city.\", \"name\": \"get_weather\", \"parameters_json_schema\": {\"properties\": {\"city\": {\"title\": \"City\", \"type\": \"string\"}}, \"required\": [\"city\"], \"title\": \"get_weatherParams\", \"type\": \"object\"}}]}]}, \"contents\": [{\"parts\": [{\"text\": \"What's the weather in Paris right now?\"}], \"role\": \"user\"}, {\"parts\": [{\"function_call\": {\"args\": {\"city\": \"Paris\"}, \"name\": \"get_weather\"}, \"thought_signature\": \"CuIBARFNMg9qsudcRbkid8_LML5sYMCy2oipMRUP28VvkCxrGhfLuIw009mnVzwe7A15YzUHoTSY3BtOinWA9aJIwh8f1OpE8np6SQPykqxjkZIzCFQunkFsBlfubf0qkB2bBvWi0MRLBmUWfhhrNXuvlvctzPz1ha7lYhc-hwPItrfXB09hH9lsEfhqTafr0q6bBz0RvTM56RfqF23LyKv-_n4y8PGDq2eY39skJWFigwRDuShKLCakLQEW9cKXU3SX2G7Enz7ppemt_DmPgTnZIMSDScaE8DbhDkuNWrLsT3gPoQ==\"}], \"role\": \"model\"}, {\"parts\": [{\"function_response\": {\"name\": \"get_weather\", \"response\": {\"temp_c\": 18, \"condition\": \"light rain\", \"city\": \"Paris\"}}}], \"role\": \"user\"}]}",
+      "gcp.vertex.agent.llm_response": "{\"model_version\":\"gemini-2.5-flash\",\"content\":{\"parts\":[{\"text\":\"The weather in Paris right now is light rain and the temperature is 18 degrees Celsius.\"}],\"role\":\"model\"},\"finish_reason\":\"STOP\",\"usage_metadata\":{\"candidates_token_count\":19,\"prompt_token_count\":126,\"prompt_tokens_details\":[{\"modality\":\"TEXT\",\"token_count\":126}],\"total_token_count\":145}}",
+      "gen_ai.usage.input_tokens": 126,
+      "gen_ai.usage.output_tokens": 19,
+      "gen_ai.response.finish_reasons": [
+        "stop"
+      ]
+    }
+  },
+  {
+    "name": "invoke_agent weather_agent",
+    "startTimeUnixNano": "1783453513773883000",
+    "endTimeUnixNano": "1783453515880019000",
+    "attributes": {
+      "gen_ai.operation.name": "invoke_agent",
+      "gen_ai.agent.description": "",
+      "gen_ai.agent.name": "weather_agent",
+      "gen_ai.conversation.id": "08302103-6b6a-4f02-b177-5768824240fc"
+    }
+  },
+  {
+    "name": "invocation",
+    "startTimeUnixNano": "1783453513773293000",
+    "endTimeUnixNano": "1783453515880402000",
+    "attributes": {}
+  }
+]
