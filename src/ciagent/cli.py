@@ -2624,13 +2624,30 @@ def generate_checks_cmd(config, kb_path, baseline_dir, dry_run, yes):
               help='Hand-labels file (YAML/JSON: query → pass|fail) for agreement + Cohen\'s κ')
 @click.option('--sample', default=None, type=int,
               help='Audit only the first N judged queries (cost control)')
+@click.option('--live', is_flag=True,
+              help='Re-run the agent for FRESH answers before scoring — breaks '
+                   'the baseline circularity (needs `runner:` in the spec)')
+@click.option('--answers', 'answers_path', default=None, type=click.Path(exists=True),
+              help='Score answers from a `ciagent test --format json` results file '
+                   'instead of golden baselines')
 @click.option('--format', 'fmt', type=click.Choice(['console', 'json']),
               default='console', show_default=True)
 @click.option('--yes', '-y', is_flag=True, help='Skip cost confirmation')
-def judge_audit_cmd(config, baseline_dir, repeats, labels_path, sample, fmt, yes):
+def judge_audit_cmd(config, baseline_dir, repeats, labels_path, sample, live,
+                    answers_path, fmt, yes):
     """Audit your LLM judge against ground truth you already have.
 
-    Re-scores RECORDED answers (golden baselines) — the agent is never re-run.
+    Answer sources, in order of rigor:
+
+    \b
+      --live           re-run the agent, score FRESH answers (most honest)
+      --answers FILE   score a `ciagent test --format json` results file
+      (default)        score recorded golden baselines
+
+    Auditing against goldens has a known blind spot: `generate-checks`
+    guarantees its checks pass those same baselines, so on generated checks
+    "judge PASS / check FAIL" can never fire and agreement inflates by
+    construction. Audit on fresh answers; gate on goldens.
 
     \b
     Three measurements:
@@ -2651,7 +2668,9 @@ def judge_audit_cmd(config, baseline_dir, repeats, labels_path, sample, fmt, yes
         2 — configuration / infrastructure error
     """
     from .engine.judge_audit import (
+        collect_live_answers,
         load_answers_from_baselines,
+        load_answers_from_results_json,
         load_labels_file,
         load_retrieval_flags_from_baselines,
         run_judge_audit,
@@ -2660,6 +2679,11 @@ def judge_audit_cmd(config, baseline_dir, repeats, labels_path, sample, fmt, yes
     from .exceptions import ConfigError
     from .loader import load_spec
 
+    if live and answers_path:
+        console.print("[bold red]--live and --answers are mutually exclusive:[/] "
+                      "pick one answer source.")
+        sys.exit(2)
+
     try:
         spec = load_spec(config)
     except ConfigError as e:
@@ -2667,14 +2691,31 @@ def judge_audit_cmd(config, baseline_dir, repeats, labels_path, sample, fmt, yes
         sys.exit(2)
 
     effective_baseline_dir = baseline_dir or spec.baseline_dir
-    answers = load_answers_from_baselines(effective_baseline_dir)
-    if not answers:
-        console.print(
-            f"[bold red]No recorded answers found in '{effective_baseline_dir}'.[/]\n"
-            "The audit re-scores recorded baselines. Record some first:\n"
-            "  [cyan]ciagent record <test>[/]  or  [cyan]ciagent test --format json[/]"
-        )
-        sys.exit(2)
+
+    # ── Answer source: --live (fresh) > --answers (results file) > baselines ──
+    if answers_path:
+        try:
+            answers = load_answers_from_results_json(answers_path)
+        except (ValueError, OSError) as e:
+            console.print(f"[bold red]Answers file error:[/] {e}")
+            sys.exit(2)
+        source_label = f"answers: {answers_path}"
+    elif live:
+        answers = {}  # collected below, after the judged set is known
+        source_label = "answers: live (fresh agent runs)"
+    else:
+        answers = load_answers_from_baselines(effective_baseline_dir)
+        if not answers:
+            console.print(
+                f"[bold red]No recorded answers found in '{effective_baseline_dir}'.[/]\n"
+                "Give the audit answers to score:\n"
+                "  [cyan]ciagent judge-audit --live[/]  (fresh agent runs — most honest)\n"
+                "  [cyan]ciagent test --format json > results.json[/] then "
+                "[cyan]--answers results.json[/]\n"
+                "  or record baselines: [cyan]ciagent record <test>[/]"
+            )
+            sys.exit(2)
+        source_label = "answers: golden baselines"
 
     labels = None
     if labels_path:
@@ -2684,11 +2725,14 @@ def judge_audit_cmd(config, baseline_dir, repeats, labels_path, sample, fmt, yes
             console.print(f"[bold red]Labels file error:[/] {e}")
             sys.exit(2)
 
-    # Which queries will actually be judged (have rubrics AND a recorded answer)?
+    # Which queries will actually be judged? Rubrics required; an answer is
+    # required too unless --live produces them on demand.
     from .engine.judge_audit import _judge_rubrics
     judged_queries = []
     for q in spec.queries:
-        if q.correctness is None or q.query not in answers:
+        if q.correctness is None:
+            continue
+        if not live and q.query not in answers:
             continue
         if _judge_rubrics(q.correctness):
             judged_queries.append(q)
@@ -2697,21 +2741,26 @@ def judge_audit_cmd(config, baseline_dir, repeats, labels_path, sample, fmt, yes
     if not judged_queries:
         console.print(
             "[bold red]No auditable queries:[/] none of the spec's queries have "
-            "judge rubrics with a recorded baseline answer."
+            "judge rubrics" + (" with a recorded answer." if not live else ".")
         )
         sys.exit(2)
 
     n_calls = sum(
         len(_judge_rubrics(q.correctness)) for q in judged_queries
     ) * max(1, repeats)
+    live_note = f" │ agent runs: [cyan]{len(judged_queries)}[/]" if live else ""
     console.print(
         f"[bold blue]CIAgent v{__version__}[/] │ judge-audit │ agent: [cyan]{spec.agent}[/] │ "
         f"queries: [cyan]{len(judged_queries)}[/] │ repeats: [cyan]{repeats}[/] │ "
-        f"judge calls: [cyan]~{n_calls}[/]"
+        f"judge calls: [cyan]~{n_calls}[/]{live_note} │ {source_label}"
     )
     if not yes and fmt == "console":
         from rich.prompt import Confirm
-        if not Confirm.ask(f"Proceed with ~{n_calls} judge calls? [Y/n]", default=True):
+        prompt = (
+            f"Proceed with {len(judged_queries)} agent run(s) + ~{n_calls} judge calls? [Y/n]"
+            if live else f"Proceed with ~{n_calls} judge calls? [Y/n]"
+        )
+        if not Confirm.ask(prompt, default=True):
             console.print("[yellow]Aborted.[/]")
             sys.exit(0)
 
@@ -2719,9 +2768,31 @@ def judge_audit_cmd(config, baseline_dir, repeats, labels_path, sample, fmt, yes
         if fmt == "console":
             console.print(f"  [dim]audited:[/] {q[:70]}")
 
-    # F4: was each judged query's recorded retrieval empty? (reported row)
-    retrieval_flags = load_retrieval_flags_from_baselines(
-        effective_baseline_dir, spec,
+    if live:
+        def _run_progress(q: str) -> None:
+            if fmt == "console":
+                console.print(f"  [dim]agent ran:[/] {q[:70]}")
+
+        try:
+            answers = collect_live_answers(
+                spec, queries=judged_queries, progress=_run_progress,
+            )
+        except (ValueError, ImportError, AttributeError) as e:
+            console.print(f"[bold red]--live runner error:[/] {e}")
+            sys.exit(2)
+        if not answers:
+            console.print(
+                "[bold red]--live produced no answers:[/] every agent run "
+                "failed or returned empty output."
+            )
+            sys.exit(2)
+
+    # F4: was each judged query's recorded retrieval empty? (reported row).
+    # Only meaningful for the baseline source — for --live / --answers the
+    # scored answers' retrieval isn't what the baselines recorded.
+    retrieval_flags = (
+        load_retrieval_flags_from_baselines(effective_baseline_dir, spec)
+        if not live and not answers_path else None
     )
 
     try:
