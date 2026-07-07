@@ -422,6 +422,87 @@ def load_answers_from_baselines(baseline_dir: str) -> dict[str, str]:
     return answers
 
 
+def collect_live_answers(
+    spec: AgentCISpec,
+    queries: Optional[list[GoldenQuery]] = None,
+    run_fn: Optional[Callable[[str], Any]] = None,
+    progress: Optional[Callable[[str], None]] = None,
+) -> dict[str, str]:
+    """Re-run the agent for fresh answers (``judge-audit --live``).
+
+    The circularity this exists to break (outside-voice review, binding):
+    ``generate-checks`` guarantees its checks pass the golden baselines, so
+    auditing the judge against those same baselines can never produce a
+    "judge PASS / check FAIL" row on generated checks — Mode-1 agreement
+    inflates by construction. The rule: **audit on fresh answers, gate on
+    goldens.**
+
+    Args:
+        spec:     Loaded spec; ``spec.runner`` is resolved unless run_fn given.
+        queries:  Queries to run (defaults to all spec queries). Callers pass
+                  only the judged queries so cost matches the confirm gate.
+        run_fn:   Injectable runner (tests); (query: str) → Trace | str.
+        progress: Optional callback(query_text) after each agent run.
+
+    Returns:
+        query text → fresh answer. Queries whose run failed or produced no
+        extractable answer are omitted (the audit skips them, same as a
+        missing baseline).
+    """
+    from ciagent.engine.parallel import _run_with_retry, resolve_runner
+    from ciagent.engine.runner import _extract_answer
+
+    if run_fn is None:
+        if not spec.runner:
+            raise ValueError(
+                "--live re-runs the agent, which needs a `runner:` key in the "
+                "spec (e.g. runner: \"myagent.run:run_agent\")."
+            )
+        run_fn = resolve_runner(spec.runner)
+
+    answers: dict[str, str] = {}
+    for gq in queries if queries is not None else spec.queries:
+        trace = _run_with_retry(run_fn, gq.query, retry_count=2, backoff=1.0)
+        if trace is None:
+            continue
+        answer = _extract_answer(trace)
+        if answer:
+            answers[gq.query] = answer
+        if progress is not None:
+            progress(gq.query)
+    return answers
+
+
+def load_answers_from_results_json(path: str) -> dict[str, str]:
+    """Load recorded answers from ``ciagent test --format json`` output.
+
+    Accepts the results file shape: ``{"results": [{"query", "answer", ...}]}``
+    (a bare list of result objects also works). Entries without an answer are
+    skipped — the audit treats them like a missing baseline.
+    """
+    import json
+    from pathlib import Path
+
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    results = data.get("results") if isinstance(data, dict) else data
+    if not isinstance(results, list):
+        raise ValueError(
+            f"'{path}' is not a ciagent results file — expected "
+            '{"results": [...]} from `ciagent test --format json`.'
+        )
+    answers: dict[str, str] = {}
+    for r in results:
+        if isinstance(r, dict) and r.get("query") and r.get("answer"):
+            answers[str(r["query"])] = str(r["answer"])
+    if not answers:
+        raise ValueError(
+            f"No answers found in '{path}'. Results files include answer "
+            "text from ciagent 0.9.0 — re-run `ciagent test --format json` "
+            "with a current version."
+        )
+    return answers
+
+
 def load_retrieval_flags_from_baselines(
     baseline_dir: str,
     spec: AgentCISpec,

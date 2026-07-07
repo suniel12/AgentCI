@@ -74,7 +74,35 @@ With fewer than 5 checkable queries the report flags its rates as anecdotes.
 
 ## Where the answers come from
 
-`--baseline-dir` (default: the spec's `baseline_dir`) is scanned recursively
-for baseline JSON files; both `ciagent record` output and versioned
-`ciagent save` baselines are accepted. Queries are matched to the spec by
-query text.
+Three sources, in order of rigor:
+
+| Source | Flag | When to use |
+|--------|------|-------------|
+| Fresh agent runs | `--live` | The honest default for calibration — see below |
+| Results file | `--answers results.json` | Reuse a `ciagent test --format json` run you already paid for |
+| Golden baselines | *(default)* | Quick look; subject to the circularity below |
+
+With the default source, `--baseline-dir` (default: the spec's
+`baseline_dir`) is scanned recursively for baseline JSON files; both
+`ciagent record` output and versioned `ciagent save` baselines are
+accepted. Queries are matched to the spec by query text.
+
+`--live` re-runs the agent (the spec needs a `runner:` key) for exactly the
+judged queries, then scores the fresh answers. The confirm prompt counts
+both agent runs and judge calls.
+
+## The circularity you must not audit inside (read this too)
+
+Auditing the judge against golden baselines proves nothing when your
+deterministic checks came from `generate-checks`: that command **validates
+every generated check against those same baselines** — a check that fails a
+golden answer is rejected before you ever see it. So on generated checks,
+scored against goldens, "judge PASS / check FAIL" *cannot fire by
+construction*, and Mode-1 agreement is inflated.
+
+The rule: **audit on fresh answers, gate on goldens.** Use `--live` (or
+`--answers` with a fresh `ciagent test --format json` run) whenever your
+checks were generated. Hand-written checks don't have this problem, but
+fresh answers are still the stronger measurement — the judge gets scored on
+what your agent says today, not on the answers your suite was calibrated
+against.
