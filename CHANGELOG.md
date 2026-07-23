@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — published world-file format + JSON Schema
+- The world-file format (the frozen-tool-state artifact with no standard
+  equivalent) is now documented at docs/world-file-schema.md and published
+  as a machine-readable JSON Schema (2020-12) shipped in the package:
+  `from ciagent.world import world_file_schema`. A conformance test enforces
+  that every world the suite produces (freeze + mutate output) AND a minimal
+  hand-authored world validate, and that malformed worlds are rejected — so
+  the schema is real, not prose
+- Framed as documentation, not a standards campaign: consume it if useful.
+  Compat promise is narrow and matches the loader: unknown keys within
+  world_schema 1 are ignored; a version bump is a hard incompatibility
+- Design and scope decisions (ATIF import blocked on a real fixture; OTel
+  export deferred as speculative + lossy): Plan_docs/standards_adoption.md
+
 ## [0.14.0] - 2026-07-23
 
 ### Added — world mutations: chaos engineering on frozen fixtures
