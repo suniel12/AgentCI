@@ -245,16 +245,19 @@ def emit_stability_console(report: "StabilityReport") -> None:
                 f"pass_rate={q.pass_rate:.2f}  "
                 f"source: {label} ({q.flip_reason}){partial}"
             )
-        from ciagent.engine.stability import FlipSource
-        agent_side = sum(1 for q in flipped if q.flip_source == FlipSource.AGENT_VARIANCE)
-        judge_side = sum(1 for q in flipped if q.flip_source == FlipSource.JUDGE_FLAKE)
-        infra = sum(1 for q in flipped if q.flip_source == FlipSource.INFRA_ERROR)
-        mixed = len(flipped) - agent_side - judge_side - infra
-        print(
-            f"\n   Flip sources: {agent_side} agent-variance (fix the agent) │ "
-            f"{judge_side} judge-flake (fix the eval) │ "
-            f"{infra} infra-error (retry) │ {mixed} mixed"
-        )
+        from ciagent.engine.stability import flip_source_counts
+        counts = flip_source_counts(flipped)
+        # Every source gets its own bucket (retrieval-variance used to hide
+        # inside "mixed"); actions annotate the two that matter most.
+        _action = {
+            "agent-variance": " (fix the agent)",
+            "retrieval-variance": " (fix the retriever)",
+            "judge-flake": " (fix the eval)",
+            "infra-error": " (retry)",
+        }
+        parts = [f"{n} {src}{_action.get(src, '')}"
+                 for src, n in sorted(counts.items())]
+        print("\n   Flip sources: " + " │ ".join(parts))
 
     stable_partials = [q for q in report.partial_queries if not q.flipped]
     if stable_partials:
@@ -521,11 +524,17 @@ def _emit_json(
 
 
 def _serialize_stability(report: "StabilityReport") -> dict[str, Any]:
+    from ciagent.engine.stability import flip_source_counts
+
     return {
         "runs": report.runs,
         "verdict": report.verdict,
         "per_run_scores": report.per_run_scores,
         "flipped": len(report.flipped_queries),
+        # Suite-level source breakdown — the wedge, machine-actionable: a CI
+        # script or the MCP agent can gate on attribution without re-deriving.
+        "flip_sources": flip_source_counts(report.flipped_queries),
+        "gated_by": report.gated_by,
         "consistent_failures": len(report.consistent_failures),
         "duplicate_queries": report.duplicate_queries,
         # pass@k / pass^k are ESTIMATES computed from the observed pass rate with
