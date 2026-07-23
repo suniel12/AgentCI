@@ -1,0 +1,29 @@
+#!/bin/sh
+# Reject pushes whose commits carry an AI co-author trailer.
+# Enable once per clone: git config core.hooksPath .githooks
+
+zero=0000000000000000000000000000000000000000
+pattern='co-authored-by:.*(claude|anthropic)'
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    # Branch deletion: nothing to check.
+    [ "$local_sha" = "$zero" ] && continue
+
+    if [ "$remote_sha" = "$zero" ]; then
+        # New branch: check only commits not already on any remote.
+        range="$local_sha --not --remotes"
+    else
+        range="$remote_sha..$local_sha"
+    fi
+
+    # shellcheck disable=SC2086
+    bad=$(git log $range -i -E --grep="$pattern" --format='%h %s')
+    if [ -n "$bad" ]; then
+        echo "push rejected: AI co-author trailer in commit message(s):" >&2
+        echo "$bad" >&2
+        echo "Amend or rebase to drop the Co-Authored-By trailer, then push again." >&2
+        exit 1
+    fi
+done
+
+exit 0

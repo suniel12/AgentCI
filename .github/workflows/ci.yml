@@ -7,6 +7,22 @@ on:
     branches: [main, v3]
 
 jobs:
+  commit-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Fail on AI co-author trailers in commit messages
+      run: |
+        bad=$(git log --all -i -E --grep='co-authored-by:.*(claude|anthropic)' --format='%h %s')
+        if [ -n "$bad" ]; then
+          echo "AI co-author trailer found in commit message(s):"
+          echo "$bad"
+          echo "Amend or rebase to drop the Co-Authored-By trailer."
+          exit 1
+        fi
+
   test:
     runs-on: ubuntu-latest
     strategy:
