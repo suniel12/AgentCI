@@ -32,7 +32,7 @@ working, not an error; `ok` reports whether the invocation itself completed.
 | `ciagent_stage_list` / `_show` / `_verify` / `_drop` | staged-failure triage |
 | `ciagent_promote` / `ciagent_flip` | staged failure → golden gate; xfail flip |
 | `ciagent_world_freeze` / `_show` | freeze a failing run's tool traffic |
-| `ciagent_import` | production trace (OTel/Langfuse/LangSmith) → gated test |
+| `ciagent_import` | production trace (OTel/Langfuse/LangSmith/ATIF) → gated test |
 
 ## Guardrails (enforced by the server, not just documented)
 

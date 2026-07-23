@@ -50,3 +50,6 @@ agentci_spec.yaml
 
 # Claude context
 .claude/
+
+# Harbor benchmark output (local runs; the ATIF fixture is copied into tests/fixtures/)
+jobs/
