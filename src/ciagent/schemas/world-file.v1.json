@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/suniel12/ciagent/schemas/world-file.v1.json",
+  "title": "CIAgent World File",
+  "description": "A frozen freeze of a failing run's tool traffic (tool arguments to responses) that replays fail-closed. Produced by `ciagent world freeze` and `ciagent world mutate`; consumed by `ciagent simulate --replay --world`. `required` is the intersection of what the loader actually enforces, so both freeze/mutate output and a minimal hand-authored world validate.",
+  "type": "object",
+  "required": ["world_schema", "tools"],
+  "additionalProperties": true,
+  "properties": {
+    "world_schema": {
+      "const": 1,
+      "description": "Format version. A loader rejects any value other than the version it implements; a bump is a hard incompatibility, not forward-readable."
+    },
+    "name": {"type": "string"},
+    "agent": {"type": "string"},
+    "frozen_from": {
+      "type": "object",
+      "description": "Provenance of the source envelope (stage id or golden path).",
+      "additionalProperties": true
+    },
+    "mutated_from": {
+      "type": "object",
+      "description": "Present only on derived worlds (`world mutate`): operator, scoped tools, payload id, source hash.",
+      "additionalProperties": true
+    },
+    "gaps": {
+      "type": "array",
+      "description": "Tool calls recorded WITHOUT a result at freeze time. They can never match on replay; each surfaces as a fail-closed miss.",
+      "items": {
+        "type": "object",
+        "required": ["tool"],
+        "properties": {
+          "tool": {"type": "string"},
+          "args": {"type": "object"},
+          "turn": {"type": "integer"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "tools": {
+      "type": "object",
+      "description": "Per-tool fixtures, keyed by the tool's function name.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["fixtures"],
+        "additionalProperties": true,
+        "properties": {
+          "sequence": {
+            "type": "boolean",
+            "description": "When true, matching fixtures are consumed FIFO (state transitions); the same call can return different results over time. When absent/false, fixtures are reusable and no two may share an effective match with differing responses."
+          },
+          "suggested_ignore": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Freeze-time hints (fields that varied between calls, or long free-text) — informational, never auto-applied."
+          },
+          "fixtures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["match"],
+              "additionalProperties": true,
+              "properties": {
+                "match": {
+                  "type": "object",
+                  "description": "The frozen call's arguments. A fixture matches when every non-ignored match key is present in the offered args and scalar-equal after the framework's type coercion; extra offered keys are a miss unless they equal the parameter's signature default.",
+                  "additionalProperties": true
+                },
+                "ignore": {
+                  "type": "array",
+                  "items": {"type": "string"},
+                  "description": "Mutable-field authoring surface: these match keys accept any value (request ids, timestamps, free text)."
+                },
+                "response": {
+                  "description": "The frozen tool result, served verbatim (any JSON type). Absent means null."
+                },
+                "turn": {
+                  "type": "integer",
+                  "description": "Informational: which conversation turn this call came from."
+                },
+                "notes": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
