@@ -269,7 +269,7 @@ ciagent mcp --project .        # MCP server: coding agents run this loop themsel
 - [Writing tests](docs/writing-tests.md) — the full spec reference
 - [Cost tracking](docs/cost-tracking.md) — budgets and spike detection
 - [Golden traces](docs/golden-traces.md) — record baselines, diff regressions
-- [Import production traces](docs/import.md) — turn an exported OTel (openllmetry/ADK), Langfuse, or LangSmith trace into a gated regression test
+- [Import production traces](docs/import.md) — turn an exported OTel (openllmetry/ADK), Langfuse, LangSmith, or ATIF (Harbor) trace into a gated regression test
 - [Golden promotion](docs/promotion.md) — auto-stage failing simulate conversations, triage, one-command promote
 - [Simulated world](docs/world.md) — freeze a failing run's tool traffic, replay against it deterministically
 - [MCP server](docs/mcp.md) — the whole loop, operable by coding agents (Claude Code, Cursor)

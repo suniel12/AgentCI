@@ -24,6 +24,7 @@ You do not tell `import` the format; it sniffs the file.
 | Langfuse (v3+ SDK export) | OTel spans in the `langfuse.*` attribute dialect | `otel-langfuse` |
 | Google ADK (`google-adk` native OTel) | OTel spans in the `gcp.vertex.agent.*` dialect (llm_request/llm_response, tool_call_args/tool_response) | `otel-adk` |
 | LangSmith (`langsmith` run export / `Client.list_runs`) | JSON or JSONL run objects, flat or nested `RunTree` | `langsmith-runs` |
+| ATIF (Harbor's `trajectory.json`, and any agent emitting the Agent Trajectory Interchange Format) | `schema_version: ATIF-v*` envelope with a `steps` list | `atif` |
 
 Each dialect is verified against a real export from that tool, not against a
 hand-written fixture — "it speaks OTel" is not the same as "its attribute
@@ -33,7 +34,11 @@ survive import): the **OpenAI** and **Anthropic** providers under openllmetry, a
 full **CrewAI** crew (agent + tool + task) whose LLM calls openllmetry traces
 through litellm, a **Google ADK** agent via ADK's native OTel export, and a
 **Claude Agent SDK** `query()` run instrumented by
-`otel-instrumentation-claude-agent-sdk`.
+`otel-instrumentation-claude-agent-sdk`. The ATIF mapping is verified against
+a real Harbor trial trajectory (claude-code agent, ATIF-v1.7), with field
+names pinned to Harbor RFC 0001 — so every Harbor benchmark run, and any
+other agent that writes ATIF (Terminus-2, OpenHands, Gemini CLI), imports
+directly.
 (CrewAI's imported query is its full constructed task prompt — that is the last
 user message CrewAI actually sends. The Claude Agent SDK emits one
 session-level `invoke_agent` span carrying the messages plus bare

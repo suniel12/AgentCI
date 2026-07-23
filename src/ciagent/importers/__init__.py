@@ -4,6 +4,7 @@
 
 `import_trace_file` sniffs the format and dispatches:
   - LangSmith run objects (run_type) → importers.langsmith
+  - ATIF trajectories (Harbor's trajectory.json) → importers.atif
   - OTel GenAI spans (OTLP envelope / span lists) → importers.otel
 """
 
@@ -25,6 +26,7 @@ def import_trace_file(path: Union[str, Path]) -> tuple[Any, Optional[str], str]:
     when the file isn't a readable export — distinct from the artifact
     gate's rejection of readable-but-partial traces.
     """
+    from ciagent.importers.atif import looks_like_atif, trace_from_atif
     from ciagent.importers.langsmith import (
         LangsmithImportError,
         load_runs,
@@ -47,6 +49,9 @@ def import_trace_file(path: Union[str, Path]) -> tuple[Any, Optional[str], str]:
             if parsed is not None:
                 raise
             # fell through: not JSONL runs either — report as OTel below
+
+    if looks_like_atif(parsed):
+        return (*trace_from_atif(parsed), "atif")
 
     try:
         trace, query = trace_from_otel(load_spans(path))
