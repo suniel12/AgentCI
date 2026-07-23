@@ -220,6 +220,8 @@ def _refused(cmd: str, e: GuardrailRefused) -> dict[str, Any]:
 
 async def tool_test(cfg: ServerConfig, *, mock: bool = True, runs: int = 1,
                     stage: Optional[bool] = None, tags: Optional[str] = None,
+                    fail_on_flaky: bool = False,
+                    flaky_sources: Optional[str] = None,
                     allow_live: bool = False,
                     timeout_s: Optional[int] = None) -> dict[str, Any]:
     try:
@@ -238,6 +240,10 @@ async def tool_test(cfg: ServerConfig, *, mock: bool = True, runs: int = 1,
     if tags:
         for t in tags.split(","):
             args += ["--tags", t.strip()]
+    if fail_on_flaky:
+        args.append("--fail-on-flaky")
+    if flaky_sources:
+        args += ["--flaky-sources", flaky_sources]
     return await invoke(cfg, ("test",), args, timeout_s=timeout_s)
 
 
@@ -440,12 +446,18 @@ def build_server(cfg: ServerConfig):
     @s.tool(name="ciagent_test")
     async def _test(mock: bool = True, runs: int = 1,
                     stage: Optional[bool] = None, tags: Optional[str] = None,
+                    fail_on_flaky: bool = False,
+                    flaky_sources: Optional[str] = None,
                     allow_live: bool = False,
                     timeout_s: Optional[int] = None) -> dict:
-        """Run the single-turn suite. Exit 0 pass / 1 correctness failure / 2 infra."""
+        """Run the single-turn suite. Exit 0 pass / 1 correctness failure / 2 infra.
+        With runs>1, flaky_sources gates only on selected flip sources (e.g.
+        "agent" fails on agent-variance but tolerates judge-flake) — the JSON
+        stability block carries flip_sources counts."""
         return await tool_test(cfg, mock=mock, runs=runs, stage=stage,
-                               tags=tags, allow_live=allow_live,
-                               timeout_s=timeout_s)
+                               tags=tags, fail_on_flaky=fail_on_flaky,
+                               flaky_sources=flaky_sources,
+                               allow_live=allow_live, timeout_s=timeout_s)
 
     @s.tool(name="ciagent_simulate")
     async def _simulate(mock: bool = True, runs: int = 1,
