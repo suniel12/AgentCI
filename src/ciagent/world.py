@@ -530,3 +530,16 @@ def world_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
             return fn(*args, **kwargs)
         return world.serve(fn.__name__, _offered(args, kwargs), defaults)
     return wrapper
+
+
+def world_file_schema() -> dict[str, Any]:
+    """The published JSON Schema (2020-12) for the world-file format v1.
+
+    Ships with the package so consumers can validate world files without a
+    network fetch. Docs: docs/world-file-schema.md."""
+    import importlib.resources as res
+
+    text = (res.files("ciagent.schemas") / "world-file.v1.json").read_text(
+        encoding="utf-8"
+    )
+    return json.loads(text)
