@@ -69,7 +69,7 @@ include = [
 ]
 
 [tool.setuptools.package-data]
-ciagent = ["templates/*.j2", "examples/*.yaml"]
+ciagent = ["templates/*.j2", "examples/*.yaml", "schemas/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
