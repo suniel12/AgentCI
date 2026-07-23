@@ -1,0 +1,154 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "4ec31961-e9b7-4ff0-854b-b1035d95c691",
+  "agent": {
+    "name": "claude-code",
+    "version": "2.1.218",
+    "model_name": "claude-haiku-4-5-20251001",
+    "extra": {
+      "cwds": [
+        "/app"
+      ],
+      "git_branches": [
+        "HEAD"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "timestamp": "2026-07-23T16:37:32.673Z",
+      "source": "user",
+      "message": "Create a file called hello.txt with \"Hello, world!\" as the content.\n",
+      "extra": {
+        "is_sidechain": false
+      }
+    },
+    {
+      "step_id": 2,
+      "timestamp": "2026-07-23T16:37:36.824Z",
+      "source": "agent",
+      "model_name": "claude-haiku-4-5-20251001",
+      "message": "",
+      "reasoning_content": "The user wants me to create a file called hello.txt with \"Hello, world!\" as the content. This is straightforward - I should use the Write tool to create this file.\n\nI need to provide:\n- file_path: the absolute path to the file. Since the primary working directory is /app, I should create it at /app/hello.txt\n- content: \"Hello, world!\"\n\nLet me do this.",
+      "tool_calls": [
+        {
+          "tool_call_id": "toolu_01BGPWTxMfWaq8NaJv9DZE9M",
+          "function_name": "Write",
+          "arguments": {
+            "file_path": "/app/hello.txt",
+            "content": "Hello, world!"
+          },
+          "extra": {
+            "raw_arguments": {
+              "file_path": "/app/hello.txt",
+              "content": "Hello, world!"
+            },
+            "tool_use_name": "Write"
+          }
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "toolu_01BGPWTxMfWaq8NaJv9DZE9M",
+            "content": "File created successfully at: /app/hello.txt (file state is current in your context — no need to Read it back)\n\n[metadata] {\"type\": \"create\", \"filePath\": \"/app/hello.txt\", \"content\": \"Hello, world!\", \"structuredPatch\": [], \"originalFile\": null, \"userModified\": false}",
+            "extra": {
+              "tool_result_metadata": {
+                "tool_use_result": {
+                  "type": "create",
+                  "filePath": "/app/hello.txt",
+                  "content": "Hello, world!",
+                  "structuredPatch": [],
+                  "originalFile": null,
+                  "userModified": false
+                },
+                "raw_tool_result": {
+                  "tool_use_id": "toolu_01BGPWTxMfWaq8NaJv9DZE9M",
+                  "type": "tool_result",
+                  "content": "File created successfully at: /app/hello.txt (file state is current in your context — no need to Read it back)"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "prompt_tokens": 22651,
+        "completion_tokens": 177,
+        "cached_tokens": 16363,
+        "extra": {
+          "cache_creation_input_tokens": 6279,
+          "cache_read_input_tokens": 16363,
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 6279
+          },
+          "inference_geo": "not_available",
+          "iterations": [],
+          "speed": "standard"
+        }
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "stop_reason": "tool_use",
+        "cwd": "/app",
+        "is_sidechain": false
+      }
+    },
+    {
+      "step_id": 3,
+      "timestamp": "2026-07-23T16:37:38.034Z",
+      "source": "agent",
+      "model_name": "claude-haiku-4-5-20251001",
+      "message": "Done! I've created a file called `hello.txt` at `/app/hello.txt` with the content \"Hello, world!\".",
+      "reasoning_content": "Perfect! The file has been created successfully at /app/hello.txt with the content \"Hello, world!\". The task is complete.",
+      "metrics": {
+        "prompt_tokens": 22873,
+        "completion_tokens": 70,
+        "cached_tokens": 22642,
+        "extra": {
+          "cache_creation_input_tokens": 223,
+          "cache_read_input_tokens": 22642,
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 223
+          },
+          "inference_geo": "not_available",
+          "iterations": [],
+          "speed": "standard"
+        }
+      },
+      "llm_call_count": 1,
+      "extra": {
+        "stop_reason": "end_turn",
+        "cwd": "/app",
+        "is_sidechain": false
+      }
+    }
+  ],
+  "final_metrics": {
+    "total_prompt_tokens": 45524,
+    "total_completion_tokens": 247,
+    "total_cached_tokens": 39005,
+    "total_cost_usd": 0.01328,
+    "total_steps": 3,
+    "extra": {
+      "service_tiers": [
+        "standard"
+      ],
+      "total_cache_creation_input_tokens": 6502,
+      "total_cache_read_input_tokens": 39005
+    }
+  }
+}
