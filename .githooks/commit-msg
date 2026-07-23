@@ -1,0 +1,8 @@
+#!/bin/sh
+# Reject commits whose message carries an AI co-author trailer.
+# Enable once per clone: git config core.hooksPath .githooks
+
+if grep -Eiq 'co-authored-by:.*(claude|anthropic)' "$1"; then
+    echo "commit rejected: remove the AI Co-Authored-By trailer from the message." >&2
+    exit 1
+fi
