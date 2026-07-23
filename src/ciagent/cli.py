@@ -3009,20 +3009,27 @@ def import_cmd(trace_file, config, version_tag, dry_run, force_save):
     sys.exit(0)
 
 
-def _finish_stability_session(fmt, config, output, run_results, stability, fail_on_flaky):
+def _finish_stability_session(fmt, config, output, run_results, stability,
+                              fail_on_flaky, flaky_sources=None):
     """Render a multi-run stability session and exit with the right code.
 
     Console/github: per-query detail only for consistent failures — flips
     belong to the stability section, not the per-query noise. Other formats
     render the last run's results with the stability block attached.
 
-    Exit: 1 if any query failed in EVERY run, or flipped with --fail-on-flaky.
+    Exit: 1 if any query failed in EVERY run (independent of the flip gate);
+    or, with --fail-on-flaky, if any query flipped; or, with --flaky-sources,
+    if a flipped query's attributed source is in the selected set. Source
+    gating is the wedge: fail on agent-variance, tolerate judge-flake.
     """
     from .engine.reporter import (
         emit_query_result,
         emit_stability_console,
         report_results,
     )
+
+    # stability.gated_by carries the selected sources into the JSON emitter.
+    stability.gated_by = sorted(s.value for s in (flaky_sources or set()))
 
     if fmt in ("console", "github"):
         failed_queries = {q.query for q in stability.consistent_failures}
@@ -3042,7 +3049,12 @@ def _finish_stability_session(fmt, config, output, run_results, stability, fail_
             run_results[-1], format=fmt, spec_file=config,
             output_path=output, stability=stability,
         )
-    if fail_on_flaky and stability.flipped_queries:
+    # Flip gate (independent of consistent-failure exit above).
+    flips = stability.flipped_queries
+    if flaky_sources:
+        if any(q.flip_source in flaky_sources for q in flips):
+            exit_code = max(exit_code, 1)
+    elif fail_on_flaky and flips:
         exit_code = max(exit_code, 1)
     sys.exit(exit_code)
 
@@ -3071,6 +3083,14 @@ def _finish_stability_session(fmt, config, output, run_results, stability, fail_
                    'flip-source attribution (agent-variance vs judge-flake)')
 @click.option('--fail-on-flaky', is_flag=True,
               help='With --runs > 1: exit 1 if any query flips verdicts across runs')
+@click.option('--flaky-sources', default=None,
+              help='Gate only on these flip sources (comma-separated): '
+                   'agent-variance, judge-flake, infra-error, mixed, '
+                   'simulation-variance, retrieval-variance, world-miss; or '
+                   'aliases real/agent (=fix-the-agent), judge, infra, sim. '
+                   'E.g. --flaky-sources=agent fails on agent-variance but '
+                   'tolerates judge-flake. Implies gating; narrows '
+                   '--fail-on-flaky.')
 @click.option('--stage/--no-stage', 'stage_flag', default=None,
               help='Auto-stage failing queries for later promotion (overrides '
                    'spec staging.enabled; live runs only — mock failures are '
@@ -3078,7 +3098,7 @@ def _finish_stability_session(fmt, config, output, run_results, stability, fail_
 @click.option('--staged-dir', default=None, type=click.Path(),
               help='Staging root (default: .ciagent/staged)')
 def test_cmd(config, tags, fmt, output, baseline_dir, workers, sample_ensemble, mock, yes,
-             runs, fail_on_flaky, stage_flag, staged_dir):
+             runs, fail_on_flaky, flaky_sources, stage_flag, staged_dir):
     """Run CIAgent v2 evaluation against a spec file.
 
     Loads agentci_spec.yaml, runs the agent for each query (capturing traces),
@@ -3113,7 +3133,16 @@ def test_cmd(config, tags, fmt, output, baseline_dir, workers, sample_ensemble, 
     from .loader import load_spec, filter_by_tags
     from .engine.reporter import report_results
     from .engine.runner import evaluate_spec
+    from .engine.stability import parse_flaky_sources
     from .exceptions import ConfigError
+
+    selected_sources = None
+    if flaky_sources:
+        try:
+            selected_sources = parse_flaky_sources(flaky_sources)
+        except ValueError as e:
+            console.print(f"[bold red]--flaky-sources:[/] {e}")
+            sys.exit(2)
 
     # ── Zero-key demo fallback ────────────────────────────────────────────────
     # Only when the user did not pass --config themselves: an explicitly named
@@ -3219,6 +3248,7 @@ def test_cmd(config, tags, fmt, output, baseline_dir, workers, sample_ensemble, 
             stability = build_stability_report(spec, run_results)
             _finish_stability_session(
                 fmt, config, output, run_results, stability, fail_on_flaky,
+                flaky_sources=selected_sources,
             )
 
         exit_code = report_results(run_results[0], format=fmt, spec_file=config)
@@ -3350,6 +3380,7 @@ def test_cmd(config, tags, fmt, output, baseline_dir, workers, sample_ensemble, 
         )
         _finish_stability_session(
             fmt, config, output, run_results, stability, fail_on_flaky,
+            flaky_sources=selected_sources,
         )
 
     # ── Streaming evaluation: print each result as its trace arrives ───────

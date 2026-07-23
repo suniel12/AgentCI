@@ -79,3 +79,29 @@ fails deterministically is a regression, not noise.
 accounts for it. Start with N=3 on a schedule (nightly) rather than every PR
 if budget is tight — flakiness doesn't need to be measured on every commit to
 be known.
+
+
+## Source-aware gating: fail on agent-variance, tolerate judge-flake
+
+`--fail-on-flaky` exits 1 on any verdict flip. But CIAgent attributes every
+flip to its source (agent-variance, judge-flake, infra-error, mixed,
+simulation-variance, retrieval-variance, world-miss), and `--flaky-sources`
+turns that attribution into a gate:
+
+```bash
+ciagent test --runs 5 --flaky-sources=agent          # fail on agent-variance / retrieval-variance
+ciagent test --runs 5 --flaky-sources=agent-variance,judge-flake
+```
+
+A team with judge-flake it can't fully eliminate no longer has to choose
+between eating red builds on eval noise and disabling the gate entirely: gate
+on the sources that mean "fix the agent," tolerate the rest. Aliases: `real`
+/ `agent` (the fix-the-agent sources), `judge`, `infra`, `sim`. Sources not
+in an alias (world-miss, simulation-variance, mixed) gate only when named
+explicitly. This is the thing single-run eval tools structurally cannot do:
+they can suppress flakiness (pin the judge, tolerance bands), but they don't
+know why a verdict flipped.
+
+The `--format json` stability block carries `flip_sources` (per-source
+counts) and `gated_by` (the selected set), so CI scripts and the MCP agent
+can act on attribution mechanically.

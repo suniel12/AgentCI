@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — source-aware flaky gating (lean into the wedge)
+- New `--flaky-sources` on `ciagent test`: gate only on selected flip
+  sources (e.g. `--flaky-sources=agent` fails on agent-variance /
+  retrieval-variance but tolerates judge-flake). Attribution becomes an
+  ACTION, not just a report — the thing single-run eval tools can't do
+  (they suppress flakiness; they don't know why a verdict flipped). Aliases
+  real/agent/judge/infra/sim derive from the promotion classifier so they
+  can't drift; bare `--fail-on-flaky` is unchanged (gates any flip)
+- The stability JSON gains suite-level `flip_sources` counts and `gated_by`;
+  the console flip-source summary now shows all seven sources (retrieval-
+  variance previously hid inside "mixed"). MCP `ciagent_test` forwards
+  `fail_on_flaky`/`flaky_sources`
+- v1 is `test`-only (simulate's flip gating is entangled with its
+  lifecycle/world-miss exit fold — separate future work). Design:
+  Plan_docs/flip_attribution_deepening.md
+
 ### Added — published world-file format + JSON Schema
 - The world-file format (the frozen-tool-state artifact with no standard
   equivalent) is now documented at docs/world-file-schema.md and published

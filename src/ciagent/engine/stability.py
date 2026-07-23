@@ -49,6 +49,51 @@ class FlipSource(str, Enum):
     WORLD_MISS = "world-miss"          # replay diverged from the frozen world → not a clean agent signal
 
 
+# Aliases for `--flaky-sources`. `real`/`agent` mirror the FLAKY_AGENT class
+# in promotion.FLIP_SOURCE_TO_CLASS (the single source of truth) — the flips
+# that mean "fix the agent system." world-miss / simulation-variance / mixed
+# gate only when named explicitly.
+FLAKY_SOURCE_ALIASES: dict[str, set["FlipSource"]] = {
+    "real": {FlipSource.AGENT_VARIANCE, FlipSource.RETRIEVAL_VARIANCE},
+    "agent": {FlipSource.AGENT_VARIANCE, FlipSource.RETRIEVAL_VARIANCE},
+    "judge": {FlipSource.JUDGE_FLAKE},
+    "infra": {FlipSource.INFRA_ERROR},
+    "sim": {FlipSource.SIMULATION_VARIANCE},
+}
+
+
+def parse_flaky_sources(csv: str) -> set["FlipSource"]:
+    """Parse a --flaky-sources CSV into a FlipSource set. Accepts enum values
+    and the aliases above; raises ValueError naming the valid tokens."""
+    out: set[FlipSource] = set()
+    valid = {s.value for s in FlipSource} | set(FLAKY_SOURCE_ALIASES)
+    for raw in csv.split(","):
+        tok = raw.strip()
+        if not tok:
+            continue
+        if tok in FLAKY_SOURCE_ALIASES:
+            out |= FLAKY_SOURCE_ALIASES[tok]
+        else:
+            try:
+                out.add(FlipSource(tok))
+            except ValueError:
+                raise ValueError(
+                    f"unknown flip source '{tok}' — valid: "
+                    f"{', '.join(sorted(valid))}"
+                ) from None
+    return out
+
+
+def flip_source_counts(flipped: list) -> dict[str, int]:
+    """Suite-level {flip_source_value: count} over flipped records, all 7
+    sources; None sources bucket as 'unknown'. Only non-zero entries."""
+    counts: dict[str, int] = {}
+    for q in flipped:
+        key = q.flip_source.value if q.flip_source else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 @dataclass
 class QueryStability:
     """Multi-run stability record for a single query."""
@@ -109,6 +154,7 @@ class StabilityReport:
     total_queries: int
     queries: list[QueryStability]
     duplicate_queries: list[str] = field(default_factory=list)  # texts appearing >1× in spec
+    gated_by: list[str] = field(default_factory=list)  # flip sources --flaky-sources selected
 
     @property
     def partial_queries(self) -> list[QueryStability]:
