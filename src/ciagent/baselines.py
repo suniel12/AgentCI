@@ -143,6 +143,67 @@ def load_baseline(
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def discover_baselines(
+    baseline_dir: str = "./golden",
+    agent: Optional[str] = None,
+) -> dict[str, "Trace"]:
+    """Map query text → baseline Trace for every baseline under baseline_dir.
+
+    Scans both storage layouts in use:
+        <dir>/*.json            — flat files (written by `ciagent init --generate`)
+        <dir>/<agent>/*.json    — versioned files (written by save_baseline)
+
+    Files are keyed by their top-level "query" field. Conversation envelopes
+    (schema_version 2) and files without a query are skipped, as are files
+    that fail to parse. When the same query appears in both layouts, the
+    versioned per-agent file wins.
+
+    Args:
+        baseline_dir: Root directory for baseline files.
+        agent:        If given, only scan this agent's subdirectory (flat
+                      files are always scanned).
+
+    Returns:
+        dict mapping query_text → Trace. Empty if the directory is missing.
+    """
+    from ciagent.models import Trace
+
+    root = Path(baseline_dir)
+    if not root.is_dir():
+        return {}
+
+    if agent:
+        subdirs = [root / agent]
+    else:
+        subdirs = [d for d in sorted(root.iterdir()) if d.is_dir()]
+
+    # Flat layout first so per-agent versioned files override it.
+    files: list[Path] = sorted(root.glob("*.json"))
+    for d in subdirs:
+        files.extend(sorted(d.glob("*.json")))
+
+    baselines: dict[str, "Trace"] = {}
+    for f in files:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("schema_version", 1) != 1:
+            continue  # conversation envelopes belong to the simulate flow
+        query = data.get("query")
+        trace_data = data.get("trace")
+        if not query or not isinstance(trace_data, dict):
+            continue
+        try:
+            baselines[query] = Trace.model_validate(trace_data)
+        except Exception:  # noqa: BLE001 — one bad trace must not kill the run
+            continue
+
+    return baselines
+
+
 def list_baselines(
     agent: str,
     baseline_dir: str = "./golden",
