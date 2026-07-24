@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 import uuid
 
 
@@ -314,6 +314,14 @@ class TestCase(BaseModel):
     tags: list[str] = []
 
 
+# YAML `defaults:` short keys → TestSuite field names. Mirrors the v2 spec's
+# `defaults:` block so both config formats share the same YAML idiom.
+_SUITE_DEFAULTS_KEY_MAP = {
+    "max_cost_usd": "default_max_cost_usd",
+    "max_steps": "default_max_steps",
+}
+
+
 class TestSuite(BaseModel):
     """A collection of test cases, typically loaded from a YAML file."""
     name: str = "default"
@@ -321,10 +329,45 @@ class TestSuite(BaseModel):
     framework: str = "generic"         # "langgraph", "crewai", "generic"
     mocks: str | None = None           # Path to mocks.yaml
     tests: list[TestCase] = []
-    
+
     # Suite-level defaults
     default_max_cost_usd: float | None = None
     default_max_steps: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _map_defaults_block(cls, data: Any) -> Any:
+        """Accept a `defaults: {max_cost_usd, max_steps}` mapping from YAML."""
+        if not isinstance(data, dict) or "defaults" not in data:
+            return data
+        data = dict(data)
+        defaults = data.pop("defaults")
+        if defaults is None:
+            return data
+        if not isinstance(defaults, dict):
+            raise ValueError(
+                f"'defaults' must be a mapping, got {type(defaults).__name__}"
+            )
+        unknown = sorted(set(defaults) - set(_SUITE_DEFAULTS_KEY_MAP))
+        if unknown:
+            raise ValueError(
+                f"Unsupported keys in 'defaults': {unknown}. "
+                f"Supported: {sorted(_SUITE_DEFAULTS_KEY_MAP)}"
+            )
+        for short_key, field_name in _SUITE_DEFAULTS_KEY_MAP.items():
+            if short_key in defaults and data.get(field_name) is None:
+                data[field_name] = defaults[short_key]
+        return data
+
+    @model_validator(mode="after")
+    def _apply_defaults_to_tests(self) -> TestSuite:
+        """Fill suite-level budget defaults into tests that don't set their own."""
+        for test in self.tests:
+            if test.max_cost_usd is None:
+                test.max_cost_usd = self.default_max_cost_usd
+            if test.max_steps is None:
+                test.max_steps = self.default_max_steps
+        return self
 
 
 # ── Diff Models ────────────────────────────────────────
