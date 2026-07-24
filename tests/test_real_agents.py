@@ -12,7 +12,7 @@ import os
 import pytest
 from pathlib import Path
 
-from ciagent.config import load_config
+from ciagent.loader import load_suite as load_config
 from ciagent.runner import TestRunner
 from ciagent.models import TestResult
 

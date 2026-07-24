@@ -14,6 +14,7 @@ Commands:
 from __future__ import annotations
 
 import os
+import re
 import sys
 import shutil
 import click
@@ -21,7 +22,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.prompt import Confirm
 
-from .config import load_config
+from .loader import load_suite
 from .runner import TestRunner
 from .models import TestResult
 
@@ -2005,6 +2006,11 @@ queries:
         console.print(step)
 
 
+def _slugify_query(query: str, fallback: str = "query") -> str:
+    """Filesystem-safe slug for a query string, matching init --generate naming."""
+    return re.sub(r'[^a-z0-9]+', '-', query.lower())[:30].strip('-') or fallback
+
+
 @cli.command()
 @click.option('--queries', type=click.Path(exists=True), help='Text file with one query per line (optional, falls back to interactive)')
 @click.option('--agent', default='my-agent', help='Agent name for the spec')
@@ -2124,7 +2130,7 @@ def bootstrap(queries, agent, runner, output, baseline_dir, yes):
                     "trace": json.loads(trace.model_dump_json())
                 }
                 
-                slug = re.sub(r'[^a-z0-9]+', '-', q.lower())[:30].strip('-') or f"query_{i}"
+                slug = _slugify_query(q, fallback=f"query_{i}")
                 b_file = baseline_path / f"v1-{slug}.json"
                 with open(b_file, "w") as bf:
                     json.dump(baseline_data, bf, indent=2)
@@ -2160,7 +2166,7 @@ def run(suite, runs, tag, diff, html, fail_on_cost, ci, output_json):
         console.print(f"[bold blue]Agent CI[/] Running suite: [cyan]{suite}[/]")
 
     try:
-        config = load_config(suite)
+        config = load_suite(suite)
         runner = TestRunner(config)
 
         # Filter tests by tag if provided
@@ -2282,14 +2288,204 @@ def run(suite, runs, tag, diff, html, fail_on_cost, ci, output_json):
 
 
 @cli.command()
-@click.argument('test_name')
-@click.option('--suite', '-s', default='agentci.yaml')
-@click.option('--output', '-o', help='Output path for golden trace')
+@click.argument('target', required=False)
+@click.option('--config', '-c', 'config_path', default=None,
+              help='Path to agentci_spec.yaml (v2) or agentci.yaml (v1). '
+                   'Default: agentci_spec.yaml if present, else agentci.yaml.')
+@click.option('--suite', '-s', default=None,
+              help='DEPRECATED alias for --config (kept for v1 workflows)')
+@click.option('--output', '-o', help='(v1 only) Output path for golden trace')
+@click.option('--version', 'version_tag', default='v1', show_default=True,
+              help='(v2) Baseline version tag; files are saved as '
+                   '<baseline_dir>/<agent>/<version>-<query-slug>.json')
+@click.option('--baseline-dir', default=None,
+              help='(v2) Override baseline directory from spec')
+@click.option('--force-save', is_flag=True,
+              help='(v2) Bypass the correctness precheck and save anyway')
+@click.option('--workers', '-w', default=4, show_default=True, type=int,
+              help='(v2) Max parallel workers when recording all queries')
 @click.option('--json', 'output_json', is_flag=True, help='Output trace as JSON (for agent consumption)')
-def record(test_name, suite, output, output_json):
-    """Run agent live and save the trace as a golden baseline."""
+def record(target, config_path, suite, output, version_tag, baseline_dir,
+           force_save, workers, output_json):
+    """Run the agent live and save golden baselines.
+
+    With a v2 spec (agentci_spec.yaml), records every query through the
+    spec's runner and saves versioned baselines that 'ciagent test' compares
+    against. Pass TARGET (query text or unique substring) to record one query.
+
+    With a legacy v1 suite (agentci.yaml), TARGET is the test name and a
+    single golden trace JSON is written (deprecated path).
+    """
+    from .loader import detect_format
+    from .exceptions import ConfigError
+
+    path = config_path or suite
+    if path is None:
+        path = 'agentci_spec.yaml' if os.path.exists('agentci_spec.yaml') else 'agentci.yaml'
+
     try:
-        config = load_config(suite)
+        fmt = detect_format(path)
+    except ConfigError as e:
+        if output_json:
+            import json as json_mod
+            click.echo(json_mod.dumps({"error": str(e)}))
+        else:
+            _print_error_panel(e)
+        sys.exit(2)
+
+    if fmt == "v2":
+        _record_v2(path, target, version_tag, baseline_dir, force_save,
+                   workers, output_json)
+        return
+
+    _record_v1(path, target, output, output_json)
+
+
+def _record_v2(config, target, version_tag, baseline_dir, force_save,
+               workers, output_json):
+    """Record golden baselines for a v2 spec via its declared runner."""
+    import json as json_mod
+    from .loader import load_spec
+    from .baselines import save_baseline
+    from .engine.parallel import run_spec_parallel, resolve_runner
+    from .exceptions import AgentCIError
+
+    try:
+        spec = load_spec(config)
+    except AgentCIError as e:
+        if output_json:
+            click.echo(json_mod.dumps({"error": str(e)}))
+        else:
+            _print_error_panel(e)
+        sys.exit(2)
+
+    if not spec.runner:
+        msg = ("No runner declared in spec. Add one to record locally: "
+               "runner: \"myagent.run:run_agent\"")
+        if output_json:
+            click.echo(json_mod.dumps({"error": msg}))
+        else:
+            console.print(f"[bold red]Error:[/] {msg}")
+        sys.exit(2)
+
+    # Select queries: all by default, or one by exact text / unique substring
+    indices = None
+    if target:
+        exact = [i for i, q in enumerate(spec.queries) if q.query == target]
+        matches = exact or [i for i, q in enumerate(spec.queries)
+                            if target.lower() in q.query.lower()]
+        if not matches:
+            msg = f"No query matches '{target}' in {config}."
+            available = [q.query for q in spec.queries]
+            if output_json:
+                click.echo(json_mod.dumps({"error": msg, "queries": available}))
+            else:
+                console.print(f"[bold red]Error:[/] {msg}")
+                for q in available:
+                    console.print(f"  • {q}")
+            sys.exit(2)
+        if len(matches) > 1:
+            msg = f"'{target}' matches {len(matches)} queries; be more specific."
+            ambiguous = [spec.queries[i].query for i in matches]
+            if output_json:
+                click.echo(json_mod.dumps({"error": msg, "queries": ambiguous}))
+            else:
+                console.print(f"[bold red]Error:[/] {msg}")
+                for q in ambiguous:
+                    console.print(f"  • {q}")
+            sys.exit(2)
+        indices = matches
+
+    try:
+        runner_fn = resolve_runner(spec.runner)
+    except (ImportError, AttributeError, ValueError) as e:
+        if output_json:
+            click.echo(json_mod.dumps({"error": f"Runner error: {e}"}))
+        else:
+            console.print(f"[bold red]Runner error:[/] {e}")
+        sys.exit(2)
+
+    count = len(indices) if indices is not None else len(spec.queries)
+    if not output_json:
+        console.print(
+            f"[bold blue]CIAgent v{__version__} Record[/] │ agent: [cyan]{spec.agent}[/] │ "
+            f"queries: [cyan]{count}[/] │ version: [cyan]{version_tag}[/]"
+        )
+
+    traces = run_spec_parallel(spec, runner_fn, max_workers=workers,
+                               query_indices=indices)
+    if not traces:
+        if output_json:
+            click.echo(json_mod.dumps({"error": "No traces captured."}))
+        else:
+            console.print("[bold red]Error:[/] No traces captured.")
+        sys.exit(1)
+
+    effective_dir = baseline_dir or spec.baseline_dir
+    saved, failed = [], []
+    for query_text, trace in traces.items():
+        version = f"{version_tag}-{_slugify_query(query_text)}"
+        try:
+            out_path = save_baseline(
+                trace=trace,
+                agent=spec.agent,
+                version=version,
+                spec=spec,
+                query_text=query_text,
+                baseline_dir=effective_dir,
+                force=force_save,
+            )
+            saved.append({
+                "query": query_text,
+                "version": version,
+                "path": str(out_path),
+                "cost_usd": trace.total_cost_usd,
+                "tool_calls": trace.tool_call_sequence,
+            })
+            if not output_json:
+                console.print(f"[green]✅ Saved:[/] {out_path}")
+        except ValueError as e:
+            failed.append({"query": query_text, "error": str(e)})
+            if not output_json:
+                console.print(f"[bold red]Precheck failed for '{query_text}':[/] {e}")
+
+    missing = count - len(traces)
+    if output_json:
+        click.echo(json_mod.dumps({
+            "saved": saved,
+            "failed": failed,
+            "queries_not_traced": missing,
+        }, indent=2))
+    else:
+        console.print(f"\n[bold]Recorded {len(saved)}/{count} baselines[/] "
+                      f"→ [cyan]{effective_dir}[/]")
+        if missing:
+            console.print(f"[yellow]{missing} queries produced no trace "
+                          f"(runner errors, see log above).[/]")
+
+    if failed or missing:
+        sys.exit(1)
+
+
+def _record_v1(suite, test_name, output, output_json):
+    """Legacy v1 record path: single test from agentci.yaml (deprecated)."""
+    if not test_name:
+        msg = "TARGET (test name) is required when recording from a v1 agentci.yaml suite."
+        if output_json:
+            import json as json_mod
+            click.echo(json_mod.dumps({"error": msg}))
+        else:
+            console.print(f"[bold red]Error:[/] {msg}")
+        sys.exit(2)
+
+    if not output_json:
+        console.print(
+            "[yellow]DEPRECATED:[/] recording from v1 agentci.yaml suites will be "
+            "removed in 0.9.0. Migrate to agentci_spec.yaml and 'ciagent record'.\n"
+        )
+
+    try:
+        config = load_suite(suite)
         runner = TestRunner(config)
         agent_fn = runner._import_agent()
 
@@ -2309,11 +2505,13 @@ def record(test_name, suite, output, output_json):
         # Run the test
         result = runner.run_test(test, agent_fn)
 
-        # Attach the final output text to the trace
-        if result.trace and result.final_output:
-            result.trace.metadata["final_output"] = str(result.final_output)
-            if result.trace.spans:
-                result.trace.spans[-1].output_data = str(result.final_output)
+        # Attach the final output text to the trace metadata. RunResult has
+        # no final_output field; the agent's return value lands in the last
+        # span's output_data (set by TestRunner.run_test).
+        if result.trace and result.trace.spans:
+            final_output = result.trace.spans[-1].output_data
+            if final_output:
+                result.trace.metadata["final_output"] = str(final_output)
 
         # Determine output path
         if output:
@@ -3098,7 +3296,7 @@ def judge_audit_cmd(config, baseline_dir, repeats, labels_path, sample, live,
                 "  [cyan]ciagent judge-audit --live[/]  (fresh agent runs — most honest)\n"
                 "  [cyan]ciagent test --format json > results.json[/] then "
                 "[cyan]--answers results.json[/]\n"
-                "  or record baselines: [cyan]ciagent record <test>[/]"
+                "  or record baselines: [cyan]ciagent record[/]"
             )
             sys.exit(2)
         source_label = "answers: golden baselines"
@@ -3674,20 +3872,8 @@ def test_cmd(config, tags, fmt, output, baseline_dir, workers, sample_ensemble, 
         console.print("")
 
     # ── Load baselines (optional) — needed before streaming eval ───────────
-    baselines: dict = {}
-    baseline_path = Path(effective_baseline_dir)
-    if baseline_path.exists() and baseline_path.is_dir():
-        import glob
-        from .baselines import load_baseline
-        for f in glob.glob(str(baseline_path / "*.json")):
-            try:
-                b = load_baseline(f)
-                if "trace" in b and "query" in b.get("trace", {}):
-                    q = b["trace"]["query"]
-                    from .models import Trace
-                    baselines[q] = Trace.from_dict(b["trace"])
-            except Exception:  # noqa: BLE001
-                pass  # Skip malformed baseline files
+    from .baselines import discover_baselines
+    baselines = discover_baselines(effective_baseline_dir, agent=spec.agent)
 
     # ── Multi-run stability mode: N sequential passes, then attribution ────
     if runs > 1:

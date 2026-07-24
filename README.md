@@ -249,7 +249,7 @@ ciagent generate-checks        # Mine KB facts into deterministic assertions (ga
 ciagent test --format html -o report.html  # HTML report with per-query details
 ciagent calibrate              # Measure real agent metrics, auto-tune spec budgets
 ciagent doctor                 # Health check: spec, deps, API keys
-ciagent record <test>          # Record golden baseline
+ciagent record                 # Record golden baselines for all spec queries
 ciagent diff                   # Diff against baseline
 ciagent report -i results.json # Generate HTML report from JSON results
 ciagent simulate --stage       # Auto-stage failing conversations (repro never lost)

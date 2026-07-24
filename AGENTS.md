@@ -65,8 +65,11 @@ ciagent eval --config spec.yaml       # Evaluate a specific spec
 ciagent eval --tags safety            # Filter by tag
 
 # ── Golden Baselines ─────────────────────────────────────────────────
-ciagent record <test_name>            # Run agent live, save golden baseline
-ciagent record <test_name> -o path/   # Specify output path
+ciagent record                        # Record baselines for every spec query via the runner
+ciagent record "refund"               # Record one query (exact text or unique substring)
+ciagent record --version v2           # Tag the recorded baselines (default: v1)
+ciagent record --force-save           # Skip the correctness precheck
+ciagent record <test_name> -s agentci.yaml  # DEPRECATED v1 path (single golden trace)
 
 ciagent save --agent my-agent --version v1 --trace-file trace.json  # Save versioned baseline
 ciagent save --agent my-agent --version v2 --trace-file t.json --force-save  # Skip precheck
@@ -199,7 +202,11 @@ def test_my_agent():
     ...
 ```
 
-### YAML-Based Test Configuration (agentci.yaml)
+### YAML-Based Test Configuration (agentci.yaml, legacy v1)
+
+> The v1 `tests:` format below is deprecated and will be removed in 0.9.0.
+> New projects should use `agentci_spec.yaml` (the `queries:` format) with
+> `ciagent test`. Loading a v2 spec through the v1 loader fails loudly.
 
 ```yaml
 name: my-agent-tests
@@ -281,11 +288,16 @@ result = tool.call(origin="SFO")
 ### Golden Baseline Workflow
 
 ```bash
-# 1. Record a golden baseline from a live run
-ciagent record test_billing_routing -o golden/billing.json
+# 1. Record golden baselines from live runs (uses the spec's runner)
+ciagent record                # all queries in agentci_spec.yaml
+ciagent record "billing"      # one query, matched by text
 
-# 2. Run tests with automatic diffing against golden
-ciagent run  # Compares if golden_trace is set in agentci.yaml
+# 2. Run tests with automatic diffing against the recorded baselines
+ciagent test  # baselines are discovered from baseline_dir and keyed by query
+
+# Legacy v1 flow (agentci.yaml, removed in 0.9.0):
+#   ciagent record test_billing_routing -s agentci.yaml -o golden/billing.json
+#   ciagent run
 
 # 3. Diff categories detected:
 #    TOOLS_CHANGED, ARGS_CHANGED, SEQUENCE_CHANGED, OUTPUT_CHANGED,
