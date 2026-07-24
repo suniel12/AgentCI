@@ -15,6 +15,7 @@ from ciagent.cli import (
     _detect_kb_dir,
     _detect_runner,
     _load_golden_pairs,
+    _load_golden_report,
     _generate_smoke_queries,
     _generate_full_queries,
     _generate_runner_file,
@@ -223,6 +224,367 @@ class TestLoadGoldenPairs:
         path.write_text(json.dumps(data))
         pairs = _load_golden_pairs(str(path))
         assert len(pairs) == 1
+
+
+class TestGoldenLoadFailureModes:
+    """Each way a golden file can fail must be distinguishable and explained."""
+
+    def test_missing_file(self):
+        result = _load_golden_report("/nonexistent/file.json")
+        assert result.status == "not_found"
+        assert not result.ok
+        assert "no such file" in result.reason
+
+    def test_directory_instead_of_file(self, tmp_path):
+        result = _load_golden_report(str(tmp_path))
+        assert result.status == "unsupported_format"
+        assert "directory" in result.reason
+
+    def test_unparseable_json(self, tmp_path):
+        path = tmp_path / "golden.json"
+        path.write_text("{not valid json")
+        result = _load_golden_report(str(path))
+        assert result.status == "unreadable"
+        assert "invalid JSON" in result.reason
+
+    def test_unsupported_suffix(self, tmp_path):
+        path = tmp_path / "golden.yaml"
+        path.write_text("question: a\nanswer: b\n")
+        result = _load_golden_report(str(path))
+        assert result.status == "unsupported_format"
+        assert ".yaml" in result.reason
+        # The message lists what IS accepted.
+        assert ".jsonl" in result.reason
+
+    def test_bad_top_level_shape_reports_keys(self, tmp_path):
+        path = tmp_path / "golden.json"
+        path.write_text(json.dumps({"meta": {"n": 1}, "entries": [{"question": "q"}]}))
+        result = _load_golden_report(str(path))
+        assert result.status == "bad_shape"
+        # Names both the keys it saw and the list it could not use.
+        assert "'meta'" in result.reason or "meta" in result.reason
+        assert "entries" in result.reason
+
+    def test_empty_list(self, tmp_path):
+        path = tmp_path / "golden.json"
+        path.write_text("[]")
+        result = _load_golden_report(str(path))
+        assert result.status == "empty"
+        assert "0 rows" in result.reason
+
+    def test_rows_present_but_no_recognized_keys(self, tmp_path):
+        data = [{"foo": "a", "bar": "b"}, {"foo": "c", "bar": "d"}]
+        path = tmp_path / "golden.json"
+        path.write_text(json.dumps(data))
+        result = _load_golden_report(str(path))
+        assert result.status == "no_valid_rows"
+        assert not result.ok
+        # The observed keys must be reported so the user can see the mismatch.
+        assert "foo" in result.reason and "bar" in result.reason
+        assert result.observed_keys == ["foo", "bar"]
+
+    def test_keys_match_but_values_empty(self, tmp_path):
+        data = [{"question": "", "answer": ""}, {"question": "q", "answer": "  "}]
+        path = tmp_path / "golden.json"
+        path.write_text(json.dumps(data))
+        result = _load_golden_report(str(path))
+        assert result.status == "no_valid_rows"
+        assert "non-empty" in result.reason
+
+    def test_rows_that_are_not_objects(self, tmp_path):
+        path = tmp_path / "golden.json"
+        path.write_text(json.dumps(["just", "strings"]))
+        result = _load_golden_report(str(path))
+        assert result.status == "bad_shape"
+        assert "none are objects" in result.reason
+
+    def test_csv_without_header(self, tmp_path):
+        path = tmp_path / "golden.csv"
+        path.write_text("")
+        result = _load_golden_report(str(path))
+        assert result.status == "bad_shape"
+        assert "header" in result.reason
+
+    def test_csv_with_wrong_columns_reports_them(self, tmp_path):
+        path = tmp_path / "golden.csv"
+        path.write_text("foo,bar\n1,2\n")
+        result = _load_golden_report(str(path))
+        assert result.status == "no_valid_rows"
+        assert "foo" in result.reason
+
+
+class TestGoldenAliasMappings:
+    """Common eval-set shapes must load, and report the mapping applied."""
+
+    def test_frames_shape_rows_wrapper_with_prompt_key(self, tmp_path):
+        """The real FRAMES shape: {"rows": [{"row_index", "prompt", "answer"}]}."""
+        data = {
+            "rows": [
+                {"row_index": 0, "prompt": "Who wrote X?", "answer": "Ada"},
+                {"row_index": 1, "prompt": "When was Y?", "answer": "1994"},
+            ]
+        }
+        path = tmp_path / "sample_200.json"
+        path.write_text(json.dumps(data))
+        result = _load_golden_report(str(path))
+        assert result.ok
+        assert len(result.pairs) == 2
+        assert result.pairs[0] == {"question": "Who wrote X?", "answer": "Ada"}
+        assert result.container == "rows"
+        assert result.question_key == "prompt"
+        assert "rows read from 'rows'" in result.mapping_note()
+        assert "'prompt' -> question" in result.mapping_note()
+
+    def test_data_wrapper(self, tmp_path):
+        path = tmp_path / "golden.json"
+        path.write_text(json.dumps({"data": [{"query": "q", "expected": "a"}]}))
+        result = _load_golden_report(str(path))
+        assert result.ok
+        assert result.container == "data"
+        assert result.question_key == "query"
+        assert result.answer_key == "expected"
+
+    def test_ground_truth_alias(self, tmp_path):
+        path = tmp_path / "golden.json"
+        path.write_text(json.dumps([{"input": "q", "ground_truth": "a"}]))
+        result = _load_golden_report(str(path))
+        assert result.ok
+        assert result.pairs[0] == {"question": "q", "answer": "a"}
+        assert "'ground_truth' -> answer" in result.mapping_note()
+
+    def test_canonical_keys_report_no_mapping_note(self, tmp_path):
+        path = tmp_path / "golden.json"
+        path.write_text(json.dumps([{"question": "q", "answer": "a"}]))
+        result = _load_golden_report(str(path))
+        assert result.ok
+        assert result.mapping_note() == ""
+
+    def test_canonical_key_wins_over_alias(self, tmp_path):
+        path = tmp_path / "golden.json"
+        path.write_text(json.dumps([{"prompt": "sys", "question": "q", "answer": "a"}]))
+        result = _load_golden_report(str(path))
+        assert result.question_key == "question"
+        assert result.pairs[0]["question"] == "q"
+
+    def test_csv_aliases(self, tmp_path):
+        path = tmp_path / "golden.csv"
+        path.write_text("prompt,gold\nWhat is X?,X is Y\n")
+        result = _load_golden_report(str(path))
+        assert result.ok
+        assert result.pairs[0] == {"question": "What is X?", "answer": "X is Y"}
+        assert result.question_key == "prompt"
+        assert result.answer_key == "gold"
+
+    def test_case_insensitive_keys(self, tmp_path):
+        path = tmp_path / "golden.csv"
+        path.write_text("Question,Answer\nq,a\n")
+        result = _load_golden_report(str(path))
+        assert result.ok
+        assert result.pairs[0] == {"question": "q", "answer": "a"}
+
+    def test_partial_rows_counted(self, tmp_path):
+        data = [
+            {"prompt": "q1", "answer": "a1"},
+            {"prompt": "q2"},  # no answer
+            {"prompt": "q3", "answer": "a3"},
+        ]
+        path = tmp_path / "golden.json"
+        path.write_text(json.dumps(data))
+        result = _load_golden_report(str(path))
+        assert len(result.pairs) == 2
+        assert result.total_rows == 3
+
+    def test_extra_columns_are_dropped(self, tmp_path):
+        path = tmp_path / "golden.json"
+        path.write_text(json.dumps({"rows": [
+            {"row_index": 7, "prompt": "q", "answer": "a", "wiki_links": ["x"]},
+        ]}))
+        result = _load_golden_report(str(path))
+        assert result.pairs[0] == {"question": "q", "answer": "a"}
+
+
+class TestGoldenJsonl:
+    """JSON Lines is at least as common as CSV for eval sets."""
+
+    def test_loads_jsonl(self, tmp_path):
+        path = tmp_path / "golden.jsonl"
+        path.write_text(
+            '{"question": "What is X?", "answer": "X is Y"}\n'
+            '{"question": "How to Z?", "answer": "Do A then B"}\n'
+        )
+        result = _load_golden_report(str(path))
+        assert result.ok
+        assert len(result.pairs) == 2
+        assert result.pairs[1]["answer"] == "Do A then B"
+
+    def test_ndjson_extension(self, tmp_path):
+        path = tmp_path / "golden.ndjson"
+        path.write_text('{"prompt": "q", "ground_truth": "a"}\n')
+        result = _load_golden_report(str(path))
+        assert result.ok
+        assert result.pairs[0] == {"question": "q", "answer": "a"}
+
+    def test_jsonl_aliases_and_blank_lines(self, tmp_path):
+        path = tmp_path / "golden.jsonl"
+        path.write_text(
+            '{"prompt": "q1", "expected": "a1"}\n'
+            '\n'
+            '   \n'
+            '{"prompt": "q2", "expected": "a2"}\n'
+        )
+        result = _load_golden_report(str(path))
+        assert len(result.pairs) == 2
+        assert result.total_rows == 2  # blank lines are not counted as rows
+        assert result.question_key == "prompt"
+
+    def test_jsonl_all_lines_malformed(self, tmp_path):
+        path = tmp_path / "golden.jsonl"
+        path.write_text("not json\nalso not json\n")
+        result = _load_golden_report(str(path))
+        assert result.status == "unreadable"
+        assert "2 malformed line(s)" in result.reason
+        assert "line 1" in result.reason
+
+    def test_jsonl_partial_malformed_warns_but_loads(self, tmp_path):
+        path = tmp_path / "golden.jsonl"
+        path.write_text(
+            '{"question": "q1", "answer": "a1"}\n'
+            'oops\n'
+            '{"question": "q2", "answer": "a2"}\n'
+        )
+        result = _load_golden_report(str(path))
+        assert result.ok
+        assert len(result.pairs) == 2
+        assert any("1 malformed line(s)" in w for w in result.warnings)
+        assert any("line 2" in w for w in result.warnings)
+
+    def test_empty_jsonl(self, tmp_path):
+        path = tmp_path / "golden.jsonl"
+        path.write_text("\n\n")
+        result = _load_golden_report(str(path))
+        assert result.status == "empty"
+
+    def test_json_file_that_is_really_jsonl(self, tmp_path):
+        """A .json file holding one object per line should load, not fail."""
+        path = tmp_path / "golden.json"
+        path.write_text(
+            '{"question": "q1", "answer": "a1"}\n'
+            '{"question": "q2", "answer": "a2"}\n'
+        )
+        result = _load_golden_report(str(path))
+        assert result.ok
+        assert len(result.pairs) == 2
+        assert any("JSON Lines" in w for w in result.warnings)
+
+    def test_genuinely_broken_json_still_reports_invalid_json(self, tmp_path):
+        """The JSONL fallback must not mask a real syntax error."""
+        path = tmp_path / "golden.json"
+        path.write_text('{"question": "q", "answer": ')
+        result = _load_golden_report(str(path))
+        assert result.status == "unreadable"
+        assert "invalid JSON" in result.reason
+
+
+FRAMES_SHAPE = {
+    "rows": [
+        {"row_index": 0, "prompt": "Who wrote the Iliad?", "answer": "Homer"},
+        {"row_index": 1, "prompt": "When did Apollo 11 land?", "answer": "July 1969"},
+    ]
+}
+
+
+def _flat(output: str) -> str:
+    """Collapse rich's console wrapping so assertions match across widths."""
+    return " ".join(output.split())
+
+
+class TestInitGoldenFileReporting:
+    """`init --generate` must never consume a golden file silently."""
+
+    def _write(self, data, name="golden.json"):
+        with open(name, "w") as f:
+            json.dump(data, f)
+        return name
+
+    def test_flag_reports_load_and_uses_real_questions(self, tmp_path):
+        runner = CliRunner()
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            path = self._write(FRAMES_SHAPE)
+            result = runner.invoke(
+                cli, ['init', '--generate', '--mode', 'mock', '--golden-file', path]
+            )
+            assert result.exit_code == 0
+            assert "Loaded 2 golden pairs" in _flat(result.output)
+            # The applied mapping is stated, not guessed at by the user.
+            assert "rows read from 'rows'" in _flat(result.output)
+            assert "'prompt' -> question" in _flat(result.output)
+            with open("agentci_spec.yaml") as f:
+                spec = f.read()
+            assert "Who wrote the Iliad?" in spec
+
+    def test_flag_with_unusable_file_exits_nonzero(self, tmp_path):
+        runner = CliRunner()
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            path = self._write({"meta": {"n": 1}, "entries": [{"q": "a"}]})
+            result = runner.invoke(
+                cli, ['init', '--generate', '--mode', 'mock', '--golden-file', path]
+            )
+            assert result.exit_code == 1
+            assert "0 golden pairs loaded" in _flat(result.output)
+            assert "entries" in _flat(result.output)  # names the list it could not use
+            # No spec is written from invented questions.
+            assert not os.path.exists("agentci_spec.yaml")
+
+    def test_flag_with_wrong_keys_exits_nonzero_and_names_keys(self, tmp_path):
+        runner = CliRunner()
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            path = self._write([{"foo": "a", "bar": "b"}])
+            result = runner.invoke(
+                cli, ['init', '--generate', '--mode', 'mock', '--golden-file', path]
+            )
+            assert result.exit_code == 1
+            assert "keys seen" in _flat(result.output)
+            assert "foo" in _flat(result.output)
+
+    def _rag_project(self):
+        """Minimal layout that makes _detect_agent_type_from_code return 'rag'."""
+        os.makedirs("knowledge_base", exist_ok=True)
+        with open("knowledge_base/faq.md", "w") as f:
+            f.write("# FAQ\n\nBusiness plan costs $199/month.\n")
+        with open("agent.py", "w") as f:
+            f.write("def retrieve(query):\n    return vector_store.similarity_search(query)\n")
+
+    def test_interactive_prompt_reports_zero_and_reprompts(self, tmp_path):
+        runner = CliRunner()
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._rag_project()
+            bad = self._write([{"foo": "a"}], "bad.json")
+            good = self._write(FRAMES_SHAPE, "good.json")
+            # mock mode, confirm KB, bad path, then good path.
+            result = runner.invoke(
+                cli, ['init', '--generate'],
+                input=f"mock\n\n{bad}\n{good}\n\n",
+            )
+            # The silent case is the bug: a rejected path must say so.
+            assert "0 golden pairs loaded" in _flat(result.output)
+            assert "Loaded 2 golden pairs" in _flat(result.output)
+
+    def test_interactive_prompt_reports_success(self, tmp_path):
+        runner = CliRunner()
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._rag_project()
+            good = self._write(FRAMES_SHAPE, "good.json")
+            result = runner.invoke(
+                cli, ['init', '--generate'], input=f"mock\n\n{good}\n\n",
+            )
+            assert "Loaded 2 golden pairs" in _flat(result.output)
+
+    def test_interactive_skip_stays_silent_about_failures(self, tmp_path):
+        runner = CliRunner()
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            self._rag_project()
+            result = runner.invoke(cli, ['init', '--generate'], input="mock\n\n\n\n")
+            assert "0 golden pairs loaded" not in _flat(result.output)
 
 
 class TestScanProjectDeepKB:
