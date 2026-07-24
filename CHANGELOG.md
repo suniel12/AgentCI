@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed: silent golden-file data loss in `init --generate`
+- `_load_golden_pairs` returned `[]` for every failure mode (missing file,
+  unparseable JSON, wrapped-in-an-object shape, unrecognized key names), and
+  the interactive prompt printed nothing at all. A user who pointed `init` at
+  a real eval set with different key names saw no warning and got a spec built
+  from invented questions instead of their data. Failure modes are now
+  distinguished and reported, including the keys actually seen in the file
+- Both branches now always print the outcome, including the zero case with its
+  reason. `--golden-file` exits 1 rather than continuing; the interactive
+  prompt re-prompts (up to 3 tries) instead of silently accepting nothing
+- Common eval-set shapes are now accepted, with the applied mapping reported:
+  a top-level `rows`/`data`/`examples`/`items`/`pairs`/`records` wrapper, and
+  key aliases `prompt`/`query`/`input` for question and `expected`/
+  `expected_answer`/`gold`/`gold_answer`/`ground_truth`/`output` for answer.
+  Matching is case-insensitive; canonical `question`/`answer` win over aliases
+
+### Added: JSON Lines golden files
+- `--golden-file` now accepts `.jsonl` and `.ndjson` (one object per line),
+  with the same wrapper/alias handling as JSON and CSV. Verified equivalent,
+  not just accepted: a 200-row FRAMES eval set converted to JSONL produces a
+  byte-identical `agentci_spec.yaml` to the JSON original, and that spec runs
+  200/200 under `ciagent test --mock`
+- Malformed lines are skipped with a counted warning naming the first bad
+  line; a file where every line is malformed reports `unreadable` and exits 1
+- A `.json` file that actually holds JSON Lines is detected and parsed rather
+  than rejected as invalid JSON, with a note saying so. A genuine JSON syntax
+  error still reports `invalid JSON`
+
 ## [0.15.0] - 2026-07-23
 
 ### Added — Agent Failure Atlas (seed) + a safety-gap fix it surfaced

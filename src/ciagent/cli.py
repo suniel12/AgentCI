@@ -305,37 +305,380 @@ def _detect_kb_dir(project_dir) -> str | None:
     return None
 
 
-def _load_golden_pairs(path: str) -> list[dict]:
-    """Load golden Q&A pairs from a JSON or CSV file.
+# Top-level object keys that may wrap the row list (checked in this order).
+_GOLDEN_ROW_CONTAINERS = ("rows", "data", "examples", "items", "pairs", "records")
 
-    Expected formats:
-    - JSON: list of {"question": "...", "answer": "..."}
-    - CSV: columns named 'question' and 'answer'
+# Column/key aliases, most canonical first.  The first alias present in the
+# data wins, and the chosen mapping is reported back to the user.
+_GOLDEN_QUESTION_KEYS = ("question", "prompt", "query", "input")
+_GOLDEN_ANSWER_KEYS = (
+    "answer", "expected", "expected_answer", "gold", "gold_answer",
+    "ground_truth", "output",
+)
+
+# How many rows to inspect when deciding which key aliases the file uses.
+_GOLDEN_KEY_SAMPLE = 50
+
+
+class GoldenLoadResult:
+    """Outcome of a golden-file load, including why it produced no pairs.
+
+    ``status`` is one of: ``ok``, ``not_found``, ``unreadable``,
+    ``unsupported_format``, ``bad_shape``, ``empty``, ``no_valid_rows``.
+    """
+
+    def __init__(
+        self,
+        pairs: list[dict] | None = None,
+        status: str = "ok",
+        reason: str = "",
+        observed_keys: list[str] | None = None,
+        question_key: str | None = None,
+        answer_key: str | None = None,
+        container: str | None = None,
+        total_rows: int = 0,
+        warnings: list[str] | None = None,
+    ):
+        self.pairs = pairs or []
+        self.status = status
+        self.reason = reason
+        self.observed_keys = observed_keys or []
+        self.question_key = question_key
+        self.answer_key = answer_key
+        self.container = container
+        self.total_rows = total_rows
+        self.warnings = warnings or []
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.pairs)
+
+    def mapping_note(self) -> str:
+        """Describe any non-default key/container mapping that was applied."""
+        notes = []
+        if self.container:
+            notes.append(f"rows read from '{self.container}'")
+        if self.question_key and self.question_key != "question":
+            notes.append(f"'{self.question_key}' -> question")
+        if self.answer_key and self.answer_key != "answer":
+            notes.append(f"'{self.answer_key}' -> answer")
+        return ", ".join(notes)
+
+
+def _observed_keys(rows: list, limit: int = _GOLDEN_KEY_SAMPLE) -> list[str]:
+    """Union of dict keys across the first *limit* rows, order preserved."""
+    keys: list[str] = []
+    seen: set[str] = set()
+    for row in rows[:limit]:
+        if not isinstance(row, dict):
+            continue
+        for k in row:
+            if k not in seen:
+                seen.add(k)
+                keys.append(k)
+    return keys
+
+
+def _pick_key(keys: list[str], candidates: tuple[str, ...]) -> str | None:
+    """First candidate alias present in *keys* (case-insensitive)."""
+    lowered = {k.lower(): k for k in keys}
+    for cand in candidates:
+        if cand in lowered:
+            return lowered[cand]
+    return None
+
+
+def _unwrap_golden_rows(data) -> tuple[list | None, str | None, str]:
+    """Find the row list inside parsed JSON.
+
+    Returns ``(rows, container_key, reason_if_none)``.
+    """
+    if isinstance(data, list):
+        return data, None, ""
+    if isinstance(data, dict):
+        for key in _GOLDEN_ROW_CONTAINERS:
+            value = data.get(key)
+            if isinstance(value, list):
+                return value, key, ""
+        other_lists = [k for k, v in data.items() if isinstance(v, list)]
+        detail = (
+            f"top-level object has keys {sorted(data)}; expected a list, or an "
+            f"object with a list under one of {list(_GOLDEN_ROW_CONTAINERS)}"
+        )
+        if other_lists:
+            detail += f" (found list(s) under {other_lists})"
+        return None, None, detail
+    return None, None, (
+        f"top-level JSON is {type(data).__name__}; expected a list of objects"
+    )
+
+
+def _pairs_from_rows(rows: list, container: str | None, source: str) -> GoldenLoadResult:
+    """Normalize rows into {'question','answer'} pairs, reporting failures."""
+    if not rows:
+        return GoldenLoadResult(
+            status="empty",
+            reason=f"{source} contained 0 rows",
+            container=container,
+        )
+
+    n_rows = f"{len(rows)} row{'' if len(rows) == 1 else 's'}"
+
+    keys = _observed_keys(rows)
+    if not keys:
+        return GoldenLoadResult(
+            status="bad_shape",
+            reason=f"{source} has {n_rows} but none are objects/records",
+            container=container,
+        )
+
+    q_key = _pick_key(keys, _GOLDEN_QUESTION_KEYS)
+    a_key = _pick_key(keys, _GOLDEN_ANSWER_KEYS)
+    if q_key is None or a_key is None:
+        missing = []
+        if q_key is None:
+            missing.append(f"question key (one of {list(_GOLDEN_QUESTION_KEYS)})")
+        if a_key is None:
+            missing.append(f"answer key (one of {list(_GOLDEN_ANSWER_KEYS)})")
+        return GoldenLoadResult(
+            status="no_valid_rows",
+            reason=(
+                f"{n_rows} found, but no {' and no '.join(missing)}; "
+                f"keys seen: {keys}"
+            ),
+            observed_keys=keys,
+            container=container,
+        )
+
+    pairs: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        question, answer = row.get(q_key), row.get(a_key)
+        if not isinstance(question, str) or not isinstance(answer, str):
+            continue
+        if not question.strip() or not answer.strip():
+            continue
+        pairs.append({"question": question, "answer": answer})
+
+    if not pairs:
+        return GoldenLoadResult(
+            status="no_valid_rows",
+            reason=(
+                f"{n_rows} matched keys '{q_key}'/'{a_key}', but none had "
+                f"non-empty text in both"
+            ),
+            observed_keys=keys,
+            question_key=q_key,
+            answer_key=a_key,
+            container=container,
+        )
+
+    return GoldenLoadResult(
+        pairs=pairs,
+        status="ok",
+        reason=f"{len(pairs)} of {len(rows)} rows usable",
+        observed_keys=keys,
+        question_key=q_key,
+        answer_key=a_key,
+        container=container,
+        total_rows=len(rows),
+    )
+
+
+def _parse_jsonl(path_obj) -> tuple[list, list[int]]:
+    """Parse one JSON value per line.
+
+    Returns ``(rows, malformed_line_numbers)``.  Blank lines are ignored.
+    """
+    import json
+
+    rows: list = []
+    malformed: list[int] = []
+    with open(path_obj) as f:
+        for lineno, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                malformed.append(lineno)
+    return rows, malformed
+
+
+def _jsonl_result(path_obj, source: str) -> GoldenLoadResult:
+    """Build a load result from a JSON Lines file, reporting malformed lines."""
+    try:
+        rows, malformed = _parse_jsonl(path_obj)
+    except (OSError, UnicodeDecodeError) as e:
+        return GoldenLoadResult(status="unreadable", reason=f"could not read file ({e})")
+
+    if not rows:
+        if malformed:
+            return GoldenLoadResult(
+                status="unreadable",
+                reason=(
+                    f"no valid JSON objects; {len(malformed)} malformed line(s) "
+                    f"(first at line {malformed[0]})"
+                ),
+            )
+        return GoldenLoadResult(status="empty", reason=f"{source} contained 0 rows")
+
+    result = _pairs_from_rows(rows, None, source)
+    if malformed:
+        result.warnings.append(
+            f"skipped {len(malformed)} malformed line(s) (first at line {malformed[0]})"
+        )
+    return result
+
+
+def _load_golden_report(path: str) -> GoldenLoadResult:
+    """Load golden Q&A pairs from a JSON, JSONL, or CSV file, with diagnostics.
+
+    Accepted shapes:
+    - JSON: a list of objects, or an object wrapping that list under one of
+      ``rows``/``data``/``examples``/``items``/``pairs``/``records``.
+    - JSONL/NDJSON: one object per line.  A ``.json`` file that is really
+      JSON Lines is detected and parsed as such rather than rejected.
+    - CSV: a header row.
+    - Keys/columns: question aliases ``question``/``prompt``/``query``/``input``;
+      answer aliases ``answer``/``expected``/``expected_answer``/``gold``/
+      ``gold_answer``/``ground_truth``/``output``.
+
+    Never raises for a malformed file: the failure mode is reported on the
+    returned :class:`GoldenLoadResult` so callers can tell the user what
+    went wrong instead of silently proceeding with zero pairs.
     """
     import json
     from pathlib import Path
 
     path_obj = Path(path)
     if not path_obj.exists():
-        return []
+        return GoldenLoadResult(status="not_found", reason=f"no such file: {path}")
+    if path_obj.is_dir():
+        return GoldenLoadResult(
+            status="unsupported_format", reason=f"{path} is a directory, not a file"
+        )
 
-    if path_obj.suffix.lower() == ".json":
-        with open(path_obj) as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return [p for p in data if isinstance(p, dict) and "question" in p and "answer" in p]
-        return []
+    suffix = path_obj.suffix.lower()
 
-    if path_obj.suffix.lower() == ".csv":
+    if suffix in (".jsonl", ".ndjson"):
+        return _jsonl_result(path_obj, "JSONL file")
+
+    if suffix == ".json":
+        try:
+            with open(path_obj) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            # A .json file holding one object per line is a common mistake.
+            # Parse it rather than rejecting an otherwise usable eval set.
+            fallback = _jsonl_result(path_obj, "JSON Lines file")
+            if fallback.ok:
+                fallback.warnings.insert(
+                    0, "file is JSON Lines, not JSON: parsed one object per line"
+                )
+                return fallback
+            return GoldenLoadResult(status="unreadable", reason=f"invalid JSON ({e})")
+        except (OSError, UnicodeDecodeError) as e:
+            return GoldenLoadResult(status="unreadable", reason=f"could not read file ({e})")
+
+        rows, container, why = _unwrap_golden_rows(data)
+        if rows is None:
+            return GoldenLoadResult(status="bad_shape", reason=why)
+        return _pairs_from_rows(rows, container, "JSON file")
+
+    if suffix == ".csv":
         import csv
-        pairs: list[dict] = []
-        with open(path_obj, newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if "question" in row and "answer" in row:
-                    pairs.append({"question": row["question"], "answer": row["answer"]})
-        return pairs
+        try:
+            with open(path_obj, newline="") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+                fieldnames = list(reader.fieldnames or [])
+        except (OSError, UnicodeDecodeError, csv.Error) as e:
+            return GoldenLoadResult(status="unreadable", reason=f"could not read CSV ({e})")
 
+        if not fieldnames:
+            return GoldenLoadResult(status="bad_shape", reason="CSV has no header row")
+        result = _pairs_from_rows(rows, None, "CSV file")
+        if not result.observed_keys:
+            result.observed_keys = fieldnames
+        return result
+
+    return GoldenLoadResult(
+        status="unsupported_format",
+        reason=(
+            f"unsupported file type '{suffix or path_obj.name}' "
+            f"(expected .json, .jsonl, .ndjson, or .csv)"
+        ),
+    )
+
+
+def _load_golden_pairs(path: str) -> list[dict]:
+    """Load golden Q&A pairs from a JSON, JSONL, or CSV file.
+
+    Thin wrapper over :func:`_load_golden_report` for callers that only need
+    the pairs.  Prefer the report form when the outcome must be shown.
+    """
+    return _load_golden_report(path).pairs
+
+
+def _print_golden_result(path: str, result: GoldenLoadResult) -> None:
+    """Print the load outcome always, including the zero case."""
+    if result.ok:
+        note = result.mapping_note()
+        line = f"Loaded [cyan]{len(result.pairs)}[/] golden pairs from [cyan]{path}[/]"
+        if note:
+            line += f" [dim]({note})[/]"
+        console.print(line)
+        if result.total_rows > len(result.pairs):
+            console.print(
+                f"[dim]  {result.total_rows - len(result.pairs)} of "
+                f"{result.total_rows} rows skipped (missing or empty text)[/]"
+            )
+        for warning in result.warnings:
+            console.print(f"[yellow]  Note:[/] {warning}")
+        return
+    console.print(
+        f"[yellow]0 golden pairs loaded[/] from [cyan]{path}[/]: {result.reason}"
+    )
+
+
+def _load_golden_from_flag(path: str) -> list[dict]:
+    """Load --golden-file, reporting the outcome; exit 1 if nothing loaded.
+
+    The user explicitly named this file, so an empty load is an error rather
+    than a silent fallback to invented queries.
+    """
+    result = _load_golden_report(path)
+    _print_golden_result(path, result)
+    if not result.ok:
+        console.print(
+            "[bold red]Error:[/] --golden-file was given but no usable Q&A pairs "
+            "were found. Fix the file (or drop the flag) and re-run."
+        )
+        sys.exit(1)
+    return result.pairs
+
+
+def _prompt_for_golden_pairs(max_attempts: int = 3) -> list[dict]:
+    """Ask for a golden file path, re-prompting when a path loads nothing."""
+    from rich.prompt import Prompt
+
+    for attempt in range(max_attempts):
+        golden_path = Prompt.ask(
+            "\n    Golden Q&A pairs? (JSON/CSV path, or Enter to skip)",
+            default="",
+        )
+        if not golden_path:
+            return []
+        result = _load_golden_report(golden_path)
+        _print_golden_result(golden_path, result)
+        if result.ok:
+            return result.pairs
+        if attempt < max_attempts - 1:
+            console.print("[dim]  Try another path, or press Enter to skip.[/]")
+    console.print("[yellow]Continuing without golden pairs.[/]")
     return []
 
 
@@ -1219,7 +1562,10 @@ def _scaffold_staging_gitignore(gitignore_path: str = ".gitignore") -> bool:
               type=click.Choice(['live', 'mock']),
               help='Test run mode: live (real API) or mock (synthetic traces)')
 @click.option('--golden-file', default=None, type=click.Path(exists=True),
-              help='Path to golden Q&A pairs (JSON/CSV) for mock mode')
+              help='Path to golden Q&A pairs (JSON/JSONL/CSV) for mock mode. Accepts '
+                   'a list, a {"rows"/"data": [...]} wrapper, or one object per '
+                   'line, and question/prompt/query/input + answer/expected/gold/'
+                   'ground_truth keys. Exits 1 if the file yields no pairs.')
 @click.option('--runner', default=None,
               help='Runner import path (e.g. myagent.run:run_agent). Skips prompt.')
 def init(hook, force, example, generate, agent_description, kb_path, run_mode, golden_file, runner):
@@ -1301,6 +1647,10 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                     sys.exit(1)
 
             # ── Step 4: Q2 — Conditional follow-up ───────────────────
+            # --golden-file is loaded (and validated) exactly once, up front,
+            # so a file that yields nothing fails before any spec is written.
+            golden_flag_pairs = _load_golden_from_flag(golden_file) if golden_file else None
+
             if agent_type == "rag":
                 # Confirm KB path
                 if kb_path:
@@ -1330,17 +1680,12 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                     context = _scan_project(Path("."), kb_override=interview["kb_path"])
 
                 # Golden pairs: --golden-file flag or interactive prompt
-                if golden_file:
-                    interview["golden_pairs"] = _load_golden_pairs(golden_file)
-                    if interview["golden_pairs"]:
-                        console.print(f"Loaded [cyan]{len(interview['golden_pairs'])}[/] golden pairs from file")
+                if golden_flag_pairs:
+                    interview["golden_pairs"] = golden_flag_pairs
                 elif not non_interactive:
-                    golden_path = Prompt.ask(
-                        "\n    Golden Q&A pairs? (JSON/CSV path, or Enter to skip)",
-                        default="",
-                    )
-                    if golden_path:
-                        interview["golden_pairs"] = _load_golden_pairs(golden_path)
+                    prompted_pairs = _prompt_for_golden_pairs()
+                    if prompted_pairs:
+                        interview["golden_pairs"] = prompted_pairs
 
             elif agent_type == "tool":
                 if non_interactive:
@@ -1416,13 +1761,12 @@ def init(hook, force, example, generate, agent_description, kb_path, run_mode, g
                 # ── Mock path: zero API keys ─────────────────────────
                 console.print("\n[bold]Mock Mode[/] — zero API cost")
 
-                if golden_file:
-                    # Option 1: Golden file provided via flag
-                    pairs = _load_golden_pairs(golden_file)
-                    if pairs:
-                        queries = _build_golden_queries(pairs)
-                        has_queries = True
-                        console.print(f"Using [cyan]{len(queries)}[/] queries from golden file")
+                if golden_flag_pairs:
+                    # Option 1: Golden file provided via flag (already loaded,
+                    # reported, and validated as non-empty above).
+                    queries = _build_golden_queries(golden_flag_pairs)
+                    has_queries = True
+                    console.print(f"Using [cyan]{len(queries)}[/] queries from golden file")
                 elif interview.get("golden_pairs"):
                     # Option 1b: Golden pairs from interactive prompt
                     pairs = interview["golden_pairs"]
