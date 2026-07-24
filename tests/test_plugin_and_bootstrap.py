@@ -154,6 +154,28 @@ class TestPluginArtifacts:
         assert re.fullmatch(r"[a-z0-9][a-z0-9-]*", p["name"])
         assert p["description"]
 
+    def test_plugin_version_matches_package(self):
+        """The plugin manifests must carry the package version. They sat at
+        0.10.0 through five releases because nothing checked them; this test
+        (which also runs in the release.yml gate) makes that drift a CI
+        failure instead of a stale install dialog."""
+        pkg_version = re.search(
+            r'^version\s*=\s*"([^"]+)"',
+            (REPO_ROOT / "pyproject.toml").read_text(),
+            re.MULTILINE,
+        ).group(1)
+        p = json.loads((PLUGIN_DIR / ".claude-plugin" / "plugin.json").read_text())
+        m = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
+        assert p["version"] == pkg_version, (
+            f"plugins/ciagent/.claude-plugin/plugin.json version {p['version']} "
+            f"!= package version {pkg_version} — bump it with the release"
+        )
+        assert m["plugins"][0]["version"] == pkg_version, (
+            f".claude-plugin/marketplace.json plugin version "
+            f"{m['plugins'][0]['version']} != package version {pkg_version} "
+            f"— bump it with the release"
+        )
+
     @pytest.mark.parametrize("skill", ["onboard", "check"])
     def test_skill_frontmatter(self, skill):
         text = (PLUGIN_DIR / "skills" / skill / "SKILL.md").read_text()

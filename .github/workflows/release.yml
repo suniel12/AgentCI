@@ -28,6 +28,21 @@ jobs:
             exit 1
           fi
 
+      - name: Verify plugin manifests match package version
+        # The Claude Code plugin manifests are versioned copies of the package
+        # version; they drifted (stuck at 0.10.0 through 0.15.0) when nothing
+        # checked them. tests/test_plugin_and_bootstrap.py enforces the same
+        # invariant on every PR; this step makes the release refuse outright.
+        run: |
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          for f in plugins/ciagent/.claude-plugin/plugin.json .claude-plugin/marketplace.json; do
+            PV=$(python -c "import json,sys; d=json.load(open('$f')); print(d.get('version') or d['plugins'][0]['version'])")
+            if [ "$PV" != "$VERSION" ]; then
+              echo "::error::$f version $PV does not match package version $VERSION — bump the plugin manifests with the release."
+              exit 1
+            fi
+          done
+
       - name: Build sdist and wheel
         run: |
           pip install --upgrade build

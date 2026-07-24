@@ -92,6 +92,12 @@ Check facts, not phrasing. If the repo has a knowledge-base directory, run
 `ciagent generate-checks --kb <dir> --dry-run` and review its candidates —
 every surviving candidate was already validated against the recorded goldens.
 
+For agents with tools that can act (send, delete, pay), also consider safety
+gates: `forbidden_tools` in the spec's path layer, and `not_in_answer` leak
+checks. Runnable examples of failure modes worth gating (excessive agency,
+transcript poisoning, tool-output injection) ship in the package as the Agent
+Failure Atlas under `ciagent/examples/failure-atlas/`.
+
 ## 7. Verify
 
 ```bash
@@ -102,8 +108,17 @@ ciagent test --runs 3 --yes              # stability report
 
 Exit codes: 0 = pass (flaky-but-passing is 0), 1 = correctness failure in every
 run, 2 = infra/config error. In the stability report, flips labeled
-`agent-variance` mean the agent's answer changed (an agent problem); flips
-labeled `judge-flake` mean the eval itself is unstable (a check/judge problem).
+`agent-variance` or `retrieval-variance` mean the agent system changed its
+behavior (an agent problem); flips labeled `judge-flake` mean the eval itself
+is unstable (a check/judge problem). To make only agent-caused flips fail the
+run, add `--flaky-sources=agent` (an alias covering both agent-side sources);
+that is the flag to put in CI, since it gates real regressions while
+tolerating judge flake.
+
+Failing live queries are auto-staged under `.ciagent/staged/` (redacted at
+capture) so a repro is never lost; they can later be verified and promoted to
+permanent goldens with `ciagent stage list` / `ciagent promote` (see the
+`check` skill). Mock failures never stage.
 
 If a check fails, fix the agent or fix a factually wrong check. Do not loosen a
 correct check to make the run green — report the failure to the user instead.
@@ -114,6 +129,10 @@ correct check to make the run green — report the failure to the user instead.
   pre-push hook if the user wants it).
 - Commit: runner, `agentci_queries.txt`, `agentci_spec.yaml`, `baselines/`,
   and the workflow.
+- If the user's coding agent should run this loop itself, mention the MCP
+  server: `pip install "ciagent[mcp]"` then `ciagent mcp` (stdio; live runs
+  are refused server-side without an explicit cost cap).
 - Tell the user: how many goldens were recorded, the suite score, anything
-  flaky (with its flip source), and that `ciagent test --runs 3` is the
-  command to watch after future agent changes.
+  flaky (with its flip source), and that
+  `ciagent test --runs 3 --flaky-sources=agent` is the command to watch
+  after future agent changes.

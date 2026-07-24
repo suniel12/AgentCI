@@ -10,8 +10,9 @@ the agent it is building.
   the runner, record golden baselines, generate a spec, verify with a real
   run. Includes a cost gate before any live recording.
 - **check** — after any change to agent code, prompts, or the knowledge
-  base: run the right CIAgent check (`test`, `test --runs 3`, `judge-audit`),
-  read the stability report correctly, and never paper over a failure.
+  base: run the right CIAgent check (`test`, `test --runs 3 --flaky-sources=agent`,
+  `judge-audit`, frozen-world replay), route flips by source, triage and
+  promote staged failures, and never paper over a failure.
 
 ## Install
 
