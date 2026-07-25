@@ -164,7 +164,9 @@ def load_suite(path: Union[str, Path] = "agentci.yaml") -> TestSuite:
                 "write a v1 suite, put test cases under a 'tests:' key.",
         )
 
-    unknown_keys = config_dict.keys() - TestSuite.model_fields.keys()
+    # "defaults" is not a model field: a TestSuite validator consumes it and
+    # maps it onto the default_* fields.
+    unknown_keys = config_dict.keys() - TestSuite.model_fields.keys() - {"defaults"}
     if unknown_keys and "tests" not in config_dict:
         raise ConfigError(
             f"{p} has no 'tests:' key and contains unrecognized keys "

@@ -151,8 +151,15 @@ class TestRunner:
                 if test.max_cost_usd and ctx.trace.total_cost_usd > test.max_cost_usd:
                     all_passed = False
                     assertion_results.append({
-                        "passed": False, 
+                        "passed": False,
                         "message": f"✗ Cost ${ctx.trace.total_cost_usd:.4f} exceeds budget ${test.max_cost_usd:.4f}"
+                    })
+
+                if test.max_steps and ctx.trace.total_llm_calls > test.max_steps:
+                    all_passed = False
+                    assertion_results.append({
+                        "passed": False,
+                        "message": f"✗ LLM calls {ctx.trace.total_llm_calls} exceed budget {test.max_steps}"
                     })
 
                 # Golden Trace Diffing
